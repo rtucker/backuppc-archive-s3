@@ -1,0 +1,171 @@
+#!/usr/bin/python -W ignore::DeprecationWarning
+# A BackupPC script to archive a host's files to Amazon S3.
+#
+# Point $Conf{ArchiveClientCmd} at me.
+# Requires python-boto
+#
+# Usage: BackupPC_archiveHost tarCreatePath splitPath parPath host bkupNum \
+#             compPath fileExt splitSize outLoc parFile share
+#
+# Create secrets.py such that it has:
+# accesskey = 'amazon aws access key'
+# sharedkey = 'amazon aws shared key'
+# gpgsymmetrickey = 'gpg symmetric key -- make it good, but do not lose it'
+
+import glob
+import os
+import secrets
+import sys
+import time
+
+from subprocess import *
+
+from boto.s3.connection import S3Connection
+from boto.s3.key import Key
+import boto.exception
+
+import logging
+import logging.handlers
+
+logger = logging.getLogger('')
+loghandler = logging.handlers.SysLogHandler('/dev/log',
+                facility=logging.handlers.SysLogHandler.LOG_DAEMON)
+logformatter = logging.Formatter('%(filename)s: %(levelname)s: %(message)s')
+loghandler.setFormatter(logformatter)
+logger.addHandler(loghandler)
+logger.setLevel(logging.DEBUG)
+
+# functions
+def is_exe(fpath):
+    return os.path.exists(fpath) and os.access(fpath, os.X_OK)
+
+def encrypt_file(filename, key, compress='/bin/cat'):
+    compressmap = {'cat': 'none', 'gzip': 'ZLIB', 'bzip2': 'BZIP2'}
+    if os.path.basename(compress) in compressmap.keys():
+        compress_algo = compressmap[os.path.basename(compress)]
+    else:
+        compress_algo = 'none'
+
+    cmd =  ['/usr/bin/gpg', '--batch', '--no-tty']
+    cmd.extend(['--compress-algo', compress_algo])
+    cmd.extend(['--output', '%s.gpg' % filename])
+    cmd.extend(['--passphrase-fd', '0'])
+    cmd.extend(['--symmetric', filename])
+
+    if is_exe(cmd[0]):
+        logging.info('Encrypting %s (compression: %s)' % (filename, compress_algo))
+        logging.debug(`cmd`)
+    else:
+        logging.error('%s is not an executable file!' % cmd[0])
+
+    proc = Popen(cmd, stdin=PIPE, stdout=PIPE)
+    proc.communicate(key)
+
+    if os.path.exists(filename + '.gpg'):
+        oldfilesize = os.path.getsize(filename)
+        newfilesize = os.path.getsize(filename + '.gpg')
+        compressed = ((oldfilesize - newfilesize) / float(oldfilesize)) * 100
+        logging.info('%s shrunk by %.2f%% (%i -> %i bytes)' % (filename, compressed, oldfilesize, newfilesize))
+        os.unlink(filename)
+        return filename + '.gpg'
+    else:
+        logging.error('%s.gpg does not exist' % filename)
+        raise Exception
+
+def open_s3(accesskey, sharedkey, host):
+    conn = S3Connection(accesskey, sharedkey)
+    mybucketname = (accesskey + '-bkup-' + host).lower()
+    try:
+        bucket = conn.get_bucket(mybucketname)
+    except boto.exception.S3ResponseError:
+        logging.info('Creating bucket %s' % mybucketname)
+        bucket = conn.create_bucket(mybucketname)
+    bucket.set_acl('private')
+    return bucket
+
+def handle_progress(transmitted, pending):
+    logging.debug('%i of %i bytes transmitted (%.2f%%)' % (transmitted, pending, (transmitted/float(pending))*100))
+
+def send_file(bucket, filename):
+    if bucket.get_key(filename):
+        logging.error('Duplicate filename %s! I hope that is OK.' % filename)
+    k = Key(bucket)
+    k.key = os.path.basename(filename)
+    logging.info('Uploading %s...' % os.path.basename(filename))
+
+    k.set_contents_from_filename(filename, cb=handle_progress)
+
+    return k
+ 
+# Read in arguments
+if len(sys.argv) != 12:
+    sys.stderr.write("Usage: %s tarCreatePath splitPath parPath host bkupNum \
+          compPath fileExt splitSize outLoc parFile share\n" % sys.argv[0])
+    sys.exit(1)
+else:
+    tarCreate   = sys.argv[1]
+    splitPath   = sys.argv[2]
+    parPath     = sys.argv[3]
+    host        = sys.argv[4]
+    bkupNum     = int(sys.argv[5])
+    compPath    = sys.argv[6]
+    fileExt     = sys.argv[7]
+    splitSize   = int(sys.argv[8])
+    outLoc      = sys.argv[9]
+    parfile     = sys.argv[10]
+    share       = sys.argv[11]
+
+for i in [tarCreate, compPath, splitPath, parPath]:
+    if i is not '' and not is_exe(i):
+        sys.stderr.write('Error: %s is not an executable program\n' % i)
+        sys.exit(1)
+
+mesg = "Writing archive for host %s, backup #%i" % (host, bkupNum)
+if splitSize > 0 and is_exe(splitPath):
+    mesg += ', split into %i byte chunks' % splitSize
+if secrets.gpgsymmetrickey:
+    mesg += ', encrypted with secret key'
+
+logging.info(mesg)
+print mesg
+
+# Prepare the pipeline
+if share == '*':
+    share = '\*'
+
+cmd = '%s -t -h %s -n %i -s %s . ' % (tarCreate, host, bkupNum, share)
+
+if splitSize > 0 and is_exe(splitPath):
+    filehead = '%s/%s.%i.tar.' % (outLoc, host, bkupNum)
+    fileglob = filehead + '*'
+    cmd += '| %s -b %i - %s' % (splitPath, splitSize, filehead)
+else:
+    fileglob = '%s/%s.%i.tar' % (outLoc, host, bkupNum)
+    cmd += '> %s' % fileglob
+
+logging.debug('Executing %s' % cmd)
+
+returncode = os.system(cmd)
+
+if returncode != 0:
+    logger.error('%s died with exit code %i' % (cmd, returncode))
+    sys.exit(1)
+
+logging.info('Beginning post-processing of %s #%i' % (host, bkupNum))
+
+bucket = open_s3(secrets.accesskey, secrets.sharedkey, host)
+
+for i in sorted(glob.glob(fileglob)):
+    if secrets.gpgsymmetrickey:
+        sendfile = encrypt_file(i, secrets.gpgsymmetrickey, compPath)
+    else:
+        sendfile = i
+
+    key = send_file(bucket, sendfile)
+    key.set_metadata('backuppc_cmd', cmd)
+    key.set_metadata('backuppc_mesg', mesg)
+    key.set_acl('private')
+    key.close()
+
+    os.unlink(sendfile)
+
