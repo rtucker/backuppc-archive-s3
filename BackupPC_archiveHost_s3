@@ -120,6 +120,9 @@ for i in [tarCreate, compPath, splitPath, parPath]:
         sys.stderr.write('Error: %s is not an executable program\n' % i)
         sys.exit(1)
 
+# open s3 connection
+bucket = open_s3(secrets.accesskey, secrets.sharedkey, host)
+
 mesg = "Writing archive for host %s, backup #%i" % (host, bkupNum)
 if splitSize > 0 and is_exe(splitPath):
     mesg += ', split into %i byte chunks' % splitSize
@@ -152,8 +155,6 @@ if returncode != 0:
     sys.exit(1)
 
 logging.info('Beginning post-processing of %s #%i' % (host, bkupNum))
-
-bucket = open_s3(secrets.accesskey, secrets.sharedkey, host)
 
 for i in sorted(glob.glob(fileglob)):
     if secrets.gpgsymmetrickey:
