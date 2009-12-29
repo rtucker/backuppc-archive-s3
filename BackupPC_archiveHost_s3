@@ -73,7 +73,7 @@ def encrypt_file(filename, key, compress='/bin/cat'):
         raise Exception
 
 def open_s3(accesskey, sharedkey, host):
-    conn = S3Connection(accesskey, sharedkey)
+    conn = S3Connection(accesskey, sharedkey, is_secure=False)
     mybucketname = (accesskey + '-bkup-' + host).lower()
     try:
         bucket = conn.get_bucket(mybucketname)
