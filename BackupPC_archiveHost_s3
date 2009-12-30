@@ -125,7 +125,7 @@ class SlowFile:
             logger.debug('Target %i bytes/second (%i kilobits/second), delay factor %.2f, block len %i' % (targetspeed, targetspeed*8/1024, self.delayfactor, len))
             try:
                 newkbits = int(open('/home/rtucker/Dropbox/Semaphores/BackupPC_archiveHost_s3.maxspeed', 'r').readline())
-                newspeed = (newkbits/float(8))*1024
+                newspeed = int((newkbits/float(8))*1024)
                 if newspeed != self.speed:
                     self.delayfactor = 1
                     self.speed = newspeed
@@ -259,20 +259,25 @@ else:
     fileglob = '%s/%s.%i.tar' % (outLoc, host, bkupNum)
     cmd += '> %s' % fileglob
 
-logging.debug('Executing %s' % cmd)
+# is there already evidence of this having been done before?
+if glob.glob(fileglob):
+    logging.info('Evidence of failed execution run prior!  Finishing it.')
+else:
+    logging.debug('Executing %s' % cmd)
 
-returncode = os.system(cmd)
+    returncode = os.system(cmd)
 
-if returncode != 0:
-    logger.error('%s died with exit code %i' % (cmd, returncode))
-    sys.exit(1)
+    if returncode != 0:
+        logger.error('%s died with exit code %i' % (cmd, returncode))
+        sys.exit(1)
 
 logging.info('Beginning post-processing of %i files from %s #%i' % (len(glob.glob(fileglob)), host, bkupNum))
 
 for i in sorted(glob.glob(fileglob)):
-    if secrets.gpgsymmetrickey:
+    if secrets.gpgsymmetrickey and not i.endswith('.gpg'):
         sendfile = encrypt_file(i, secrets.gpgsymmetrickey, compPath)
     else:
+        # either encryption is off, or the file is already encrypted
         sendfile = i
 
     retry_count = 0
