@@ -74,7 +74,7 @@ class SlowFile:
         self.encoding = None
 
         self.delayfactor = 1
-        self.lastblocktargettime = 2**31
+        self.lastblocktargettime = 0
 
         self.lastdebug = 0
 
@@ -103,7 +103,10 @@ class SlowFile:
 
         starttime = time.time()
 
-        if starttime < self.lastblocktargettime:
+        if self.lastblocktargettime == 0:
+            # first time through
+            pass
+        elif starttime < self.lastblocktargettime:
             # we're early
             sleepfor = self.lastblocktargettime - starttime
             time.sleep(sleepfor)
@@ -243,7 +246,8 @@ if secrets.gpgsymmetrickey:
     mesg += ', encrypted with secret key'
 
 logging.info(mesg)
-print mesg
+sys.stdout.write(mesg + '\n')
+sys.stdout.flush()
 
 # Prepare the pipeline
 if share == '*':
@@ -279,6 +283,10 @@ for i in sorted(glob.glob(fileglob)):
     else:
         # either encryption is off, or the file is already encrypted
         sendfile = i
+
+    # create some output so backuppc doesn't time out
+    sys.stdout.write("%s: Sending %s to S3...\n" % (time.strftime('%d-%H:%M:%S'), sendfile))
+    sys.stdout.flush()
 
     retry_count = 0
     max_retries = 10
