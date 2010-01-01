@@ -110,22 +110,21 @@ class SlowFile:
             # we're early
             sleepfor = self.lastblocktargettime - starttime
             time.sleep(sleepfor)
-            if self.delayfactor > 1:
-                self.delayfactor -= 0.02
         else:
             # we're late; something got slow.
             self.delayfactor += 0.5
 
         if self.delayfactor < 1:
             self.delayfactor = 1
-        if self.delayfactor > 5:
-            self.delayfactor = 5
+        if self.delayfactor > 20:
+            self.delayfactor = 20
 
         targetspeed = self.speed/float(self.delayfactor)
         self.lastblocktargettime = time.time() + len/float(targetspeed)
 
         if time.time() > self.lastdebug+300:
             logger.debug('Target %i bytes/second (%i kilobits/second), delay factor %.2f, block len %i' % (targetspeed, targetspeed*8/1024, self.delayfactor, len))
+            self.delayfactor = self.delayfactor / 2
             try:
                 newkbits = int(open('/home/rtucker/Dropbox/Semaphores/BackupPC_archiveHost_s3.maxspeed', 'r').readline())
                 newspeed = int((newkbits/float(8))*1024)
