@@ -284,7 +284,7 @@ for i in sorted(glob.glob(fileglob)):
     else:
         # either encryption is off, or the file is already encrypted
         sendfile = i
-    encrypt_seconds = time.time() - sending_start()
+    encrypt_seconds = time.time() - sending_start
 
     # create some output so backuppc doesn't time out
     sys.stdout.write("%s: Sending %s to S3...\n" % (time.strftime('%d-%H:%M:%S'), sendfile))
@@ -311,7 +311,7 @@ for i in sorted(glob.glob(fileglob)):
 
     os.unlink(sendfile)
 
-    sending_seconds = time.time() - sending_start()
+    sending_seconds = time.time() - sending_start
 
     bytespersecond = size / (sending_seconds - encrypt_seconds)
 
