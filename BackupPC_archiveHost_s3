@@ -113,19 +113,23 @@ class SlowFile:
         else:
             # we're late; something got slow.
             self.delayfactor += 0.5
-            logger.debug('%.2f late (congestion?); setting delayfactor to %.2f' % (starttime - self.lastblocktargettime, self.delayfactor))
-
-        if self.delayfactor < 1:
-            self.delayfactor = 1
-        if self.delayfactor > 20:
-            self.delayfactor = 20
+            logger.debug('%.2f seconds late (congestion?); setting delayfactor to %.2f' % (starttime - self.lastblocktargettime, self.delayfactor))
 
         targetspeed = self.speed/float(self.delayfactor)
         self.lastblocktargettime = time.time() + len/float(targetspeed)
 
         if time.time() > self.lastdebug+300:
+            if self.delayfactor > 1:
+                # reduce the penalty a bit
+                self.delayfactor = self.delayfactor / 2.0
+
+            if self.delayfactor < 1:
+                self.delayfactor = 1
+            if self.delayfactor > 20:
+                self.delayfactor = 20
+
             logger.debug('Target %i bytes/second (%i kilobits/second), delay factor %.2f, block len %i' % (targetspeed, targetspeed*8/1024, self.delayfactor, len))
-            self.delayfactor = self.delayfactor / 2
+
             try:
                 newkbits = int(open('/home/rtucker/Dropbox/Semaphores/BackupPC_archiveHost_s3.maxspeed', 'r').readline())
                 newspeed = int((newkbits/float(8))*1024)
