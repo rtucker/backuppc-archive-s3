@@ -2,15 +2,10 @@
 
 # Script to manage S3-stored backups
 
-import base64
-import glob
-import md5
-import os
+import optparse
 import secrets
 import sys
 import time
-
-from subprocess import *
 
 from boto.s3.connection import S3Connection
 from boto.s3.key import Key
@@ -137,21 +132,152 @@ def make_restore_script(backup, expire=86400):
     output.append('\nEOF\n')
 
     output.append('\n# join and untar files\n')
-    output.append('\ncat .restorescript-scratch/*.tar.?? | tar -xf -\n\n')
+    output.append('cat .restorescript-scratch/*.tar.?? | tar -xf -\n\n')
 
-    output.append('\necho "DONE!  Have a nice day."\n')
+    output.append('echo "DONE!  Have a nice day."\n##\n')
 
     return output
 
 def main():
+    # check command line options
+    parser = optparse.OptionParser(usage="usage: %prog [options] list/delete/script")
+    parser.add_option("-H", "--host", dest="host",
+                      help="Name of backed-up host")
+    parser.add_option("-b", "--backup-number", dest="backupnum",
+                      help="Backup number")
+    parser.add_option("-a", "--age", dest="age",
+                      help="Delete backups older than AGE days")
+    parser.add_option("-f", "--filename", dest="filename",
+                      help="Output filename for script")
+    parser.add_option("-x", "--expire", dest="expire",
+                      help="Maximum age of script, default 86400 seconds")
+    parser.add_option("-t", "--test", dest="test", action="store_true",
+                      help="Test mode; don't actually delete")
+
+    (options, args) = parser.parse_args()
+
     conn = open_s3(secrets.accesskey, secrets.sharedkey)
 
-    for bucket in iter_backup_buckets(conn, name='olpc'):
-        backups = list_backups(bucket)
+    if options.backupnum and not options.host:
+        parser.error('Must specify --host when specifying --backup-number')
 
-        for backup in backups['olpc'].keys():
-            print make_restore_script(backups['olpc'][backup])
-            sys.exit(0)
+    if options.backupnum:
+        options.backupnum = int(options.backupnum)
+
+    if len(args) == 0:
+        args.append('list')
+
+    if len(args) > 1:
+        parser.error('Too many arguments.')
+
+    if args[0] != 'delete' and options.age:
+        parser.error('--age only makes sense with delete')
+
+    if args[0] != 'script' and (options.expire or options.filename):
+        parser.error('--expire and --filename only make sense with script')
+
+    if args[0] in ['list', 'script', 'delete']:
+        if options.host:
+            buckets = iter_backup_buckets(conn, name=options.host)
+            if not buckets:
+                parser.error('No buckets found for host "%s"' % options.host)
+        else:
+            buckets = iter_backup_buckets(conn)
+            if not buckets:
+                parser.error('No buckets found!')
+    else:
+        parser.error('Invalid option: %s' + args[0])
+
+    if args[0] == 'script':
+        if not options.host:
+            parser.error('Must specify --host to generate a script for')
+
+        backups = list_backups(buckets.next())
+
+        if not options.backupnum:
+            # assuming highest number
+            options.backupnum = max(backups[options.host].keys())
+
+        backup = backups[options.host][options.backupnum]
+
+        if not options.expire:
+            options.expire = "86400"
+
+        if options.filename:
+            fd = open(options.filename, 'w')
+            fd.writelines(make_restore_script(backup, expire=int(options.expire)))
+        else:
+            sys.stdout.writelines(make_restore_script(backup, expire=int(options.expire)))
+    elif args[0] == 'list':
+        sys.stdout.write('%25s | %5s | %20s | %5s\n' % ("Hostname", "Bkup#", "Age", "Files"))
+        sys.stdout.write('-'*72 + '\n')
+        for bucket in buckets:
+            hostnames = list_backups(bucket)
+            for hostname in hostnames.keys():
+                backups = hostnames[hostname]
+                for backupnum in backups.keys():
+                    filecount = len(backups[backupnum]['keys'])
+                    datestruct = backups[backupnum]['date']
+                    timestamp = time.mktime(datestruct)
+                    delta = int(time.time() - timestamp)
+                    if delta < 3600:
+                        prettydelta = '%i min ago' % (delta/60)
+                    elif delta < 86400:
+                        prettydelta = '%i hr ago' % (delta/3600)
+                    else:
+                        days = int(delta/60/60/24)
+                        if days == 1:
+                            s = ''
+                        else:
+                            s = 's'
+                        prettydelta = '%i day%s ago' % (days, s)
+
+                    sys.stdout.write('%25s | %5i | %20s | %5i\n' % (hostname, backupnum, prettydelta, filecount))
+    elif args[0] == 'delete':
+        if options.age:
+            maxage = int(options.age)*86400
+            for bucket in buckets:
+                hostnames = list_backups(bucket)
+                for hostname in hostnames.keys():
+                    backups = hostnames[hostname]
+                    for backupnum in backups.keys():
+                        filecount = len(backups[backupnum]['keys'])
+                        datestruct = backups[backupnum]['date']
+                        timestamp = time.mktime(datestruct)
+                        delta = int(time.time() - timestamp)
+                        if delta > maxage:
+                            sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (hostname, backupnum, filecount, delta/86400.0))
+                            for key in backups[backupnum]['keys']:
+                                if options.test:
+                                    sys.stdout.write('*')
+                                else:
+                                    key.delete()
+                                    sys.stdout.write('.')
+                            sys.stdout.write('\n')
+        elif options.host and options.backupnum:
+            for bucket in buckets:
+                hostnames = list_backups(bucket)
+                if options.host in hostnames.keys():
+                    if options.backupnum not in hostnames[options.host].keys():
+                        parser.error('Backup number %i not found' % options.backupnum)
+                    toast = hostnames[options.host][options.backupnum]
+                    filecount = len(toast['keys'])
+                    datestruct = toast['date']
+                    timestamp = time.mktime(datestruct)
+                    delta = int(time.time() - timestamp)
+
+                    sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (options.host, options.backupnum, filecount, delta/86400.0))
+                    for key in toast['keys']:
+                        if options.test:
+                            sys.stdout.write('*')
+                        else:
+                            key.delete()
+                            sys.stdout.write('.')
+                    sys.stdout.write('\n')
+                else:
+                    parser.error('Host %s not found' % options.host)
+        else:
+            parser.error('Need either an age or a host AND backup number.')
 
 if __name__ == '__main__':
     main()
