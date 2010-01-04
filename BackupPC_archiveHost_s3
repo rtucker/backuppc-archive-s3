@@ -306,6 +306,7 @@ for i in sorted(glob.glob(fileglob)):
             key.set_metadata('backuppc_cmd', cmd)
             key.set_metadata('backuppc_mesg', mesg)
             key.set_acl('private')
+            key.update_metadata()
             key.close()
             retry_count = max_retries+1
         except boto.exception.S3ResponseError as e:
