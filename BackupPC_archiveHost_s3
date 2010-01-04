@@ -243,6 +243,8 @@ for i in [tarCreate, compPath, splitPath, parPath]:
 # open s3 connection
 bucket = open_s3(secrets.accesskey, secrets.sharedkey, host)
 
+beginning = time.time()
+
 mesg = "Writing archive for host %s, backup #%i" % (host, bkupNum)
 if splitSize > 0 and is_exe(splitPath):
     mesg += ', split into %i byte chunks' % splitSize
@@ -266,6 +268,7 @@ if splitSize > 0 and is_exe(splitPath):
 else:
     fileglob = '%s/%s.%i.tar' % (outLoc, host, bkupNum)
     cmd += '> %s' % fileglob
+    filehead = fileglob + '.'
 
 # is there already evidence of this having been done before?
 if glob.glob(fileglob):
@@ -320,3 +323,11 @@ for i in sorted(glob.glob(fileglob)):
     bytespersecond = size / (sending_seconds - encrypt_seconds)
 
     sys.stdout.write('%s: File sent.  Total time %i seconds, crypto time %i seconds, transfer speed %i bytes/second.\n' % (time.strftime('%d-%H:%M:%S'), sending_seconds, encrypt_seconds, bytespersecond))
+
+# finalize the backup
+key = MyKey(bucket)
+key.key = '%sCOMPLETE' % filehead
+key.set_contents_from_string('%s %s "%s"' % (beginning, time.time(), mesg))
+key.close()
+
+

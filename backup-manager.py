@@ -34,7 +34,8 @@ def list_backups(bucket):
             {'date': Timestamp of backup (int),
              'keys': A list of keys comprising the backup,
              'hostname': Hostname (str),
-             'backupnum': Backup number (int)
+             'backupnum': Backup number (int),
+             'finalized': 0, or the timestamp the backup was finalized
             }
         }
     }
@@ -44,19 +45,24 @@ def list_backups(bucket):
 
     for key in bucket.list():
         keyparts = key.key.split('.')
-        encrypted = split = tarred = False
+        encrypted = split = tarred = final = False
 
-        if keyparts[-1] == 'gpg':
-            encrypted = True
-            keyparts.pop()
+        if keyparts[-1] == 'COMPLETE':
+            final = True
+            keyparts.pop() # back to tar
+            keyparts.pop() # back to backup number
+        else:
+            if keyparts[-1] == 'gpg':
+                encrypted = True
+                keyparts.pop()
 
-        if keyparts[-1] != 'tar' and len(keyparts[-1]) is 2:
-            split = True
-            keyparts.pop()
+            if keyparts[-1] != 'tar' and len(keyparts[-1]) is 2:
+                split = True
+                keyparts.pop()
 
-        if keyparts[-1] == 'tar':
-            tarred = True
-            keyparts.pop()
+            if keyparts[-1] == 'tar':
+                tarred = True
+                keyparts.pop()
 
         backupnum = int(keyparts.pop())
         hostname = '.'.join(keyparts)
@@ -64,13 +70,14 @@ def list_backups(bucket):
         lastmod = time.strptime(key.last_modified, '%Y-%m-%dT%H:%M:%S.000Z')
 
         if hostname in backups.keys():
-            if backupnum in backups[hostname].keys():
-                backups[hostname][backupnum]['keys'].append(key)
-            else:
-                backups[hostname][backupnum] = {'keys': [key], 'date': lastmod, 'hostname': hostname, 'backupnum': backupnum}
+            if not backupnum in backups[hostname].keys():
+                backups[hostname][backupnum] = {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': []}
         else:
-            backups[hostname] = {backupnum: {'keys': [key], 'date': lastmod, 'hostname': hostname, 'backupnum': backupnum}}
-
+            backups[hostname] = {backupnum: {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': []}}
+        if final:
+            backups[hostname][backupnum]['finalized'] = lastmod
+        else:
+            backups[hostname][backupnum]['keys'].append(key)
     return backups
 
 def iter_urls(keyset, expire=86400):
@@ -153,6 +160,8 @@ def main():
                       help="Maximum age of script, default 86400 seconds")
     parser.add_option("-t", "--test", dest="test", action="store_true",
                       help="Test mode; don't actually delete")
+    parser.add_option("-u", "--unfinalized", dest="unfinalized",
+                      action="store_true", help="Consider unfinalized backups")
 
     (options, args) = parser.parse_args()
 
@@ -194,9 +203,17 @@ def main():
 
         backups = list_backups(buckets.next())
 
-        if not options.backupnum:
+        if not options.backupnum and options.unfinalized:
             # assuming highest number
             options.backupnum = max(backups[options.host].keys())
+        elif not options.backupnum:
+            # assuming highest finalized number
+            options.backupnum = 0
+            for backup in backups[options.host].keys():
+                if backups[options.host][backup]['finalized'] > 0:
+                    options.backupnum = max(options.backupnum, backup)
+            if options.backupnum == 0:
+                parser.error('No finalized backups found!  Try --unfinalized if you dare')
 
         backup = backups[options.host][options.backupnum]
 
@@ -217,7 +234,12 @@ def main():
                 backups = hostnames[hostname]
                 for backupnum in backups.keys():
                     filecount = len(backups[backupnum]['keys'])
-                    datestruct = backups[backupnum]['date']
+                    if backups[backupnum]['finalized'] > 0:
+                        datestruct = backups[backupnum]['finalized']
+                        inprogress = ''
+                    else:
+                        datestruct = backups[backupnum]['date']
+                        inprogress = '*'
                     timestamp = time.mktime(datestruct)
                     delta = int(time.time() - timestamp)
                     if delta < 3600:
@@ -232,7 +254,8 @@ def main():
                             s = 's'
                         prettydelta = '%i day%s ago' % (days, s)
 
-                    sys.stdout.write('%25s | %5i | %20s | %5i\n' % (hostname, backupnum, prettydelta, filecount))
+                    sys.stdout.write('%25s | %5i | %20s | %5i%s\n' % (hostname, backupnum, prettydelta, filecount, inprogress))
+        sys.stdout.write('* == not yet finalized (Age == time of last activity)\n')
     elif args[0] == 'delete':
         if options.age:
             maxage = int(options.age)*86400
@@ -242,18 +265,24 @@ def main():
                     backups = hostnames[hostname]
                     for backupnum in backups.keys():
                         filecount = len(backups[backupnum]['keys'])
-                        datestruct = backups[backupnum]['date']
+                        if backups[backupnum]['finalized'] > 0:
+                            datestruct = backups[backupnum]['finalized']
+                        else:
+                            datestruct = backups[backupnum]['date']
                         timestamp = time.mktime(datestruct)
                         delta = int(time.time() - timestamp)
                         if delta > maxage:
-                            sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (hostname, backupnum, filecount, delta/86400.0))
-                            for key in backups[backupnum]['keys']:
-                                if options.test:
-                                    sys.stdout.write('*')
-                                else:
-                                    key.delete()
-                                    sys.stdout.write('.')
-                            sys.stdout.write('\n')
+                            if options.unfinalized and backups[backupnum]['finalized'] > 0:
+                                sys.stdout.write('Bypassing finalized backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
+                            else:
+                                sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (hostname, backupnum, filecount, delta/86400.0))
+                                for key in backups[backupnum]['keys']:
+                                    if options.test:
+                                        sys.stdout.write('*')
+                                    else:
+                                        key.delete()
+                                        sys.stdout.write('.')
+                                sys.stdout.write('\n')
         elif options.host and options.backupnum:
             for bucket in buckets:
                 hostnames = list_backups(bucket)
@@ -262,18 +291,26 @@ def main():
                         parser.error('Backup number %i not found' % options.backupnum)
                     toast = hostnames[options.host][options.backupnum]
                     filecount = len(toast['keys'])
+                    if toast['finalized'] > 0:
+                        datestruct = toast['finalized']
+                    else:
+                        datestruct = toast['date']
+
                     datestruct = toast['date']
                     timestamp = time.mktime(datestruct)
                     delta = int(time.time() - timestamp)
 
-                    sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (options.host, options.backupnum, filecount, delta/86400.0))
-                    for key in toast['keys']:
-                        if options.test:
-                            sys.stdout.write('*')
-                        else:
-                            key.delete()
-                            sys.stdout.write('.')
-                    sys.stdout.write('\n')
+                    if options.unfinalized and toast['finalized'] > 0:
+                        sys.stdout.write('Bypassing finalized backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
+                    else:
+                        sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (options.host, options.backupnum, filecount, delta/86400.0))
+                        for key in toast['keys']:
+                            if options.test:
+                                sys.stdout.write('*')
+                            else:
+                                key.delete()
+                                sys.stdout.write('.')
+                        sys.stdout.write('\n')
                 else:
                     parser.error('Host %s not found' % options.host)
         else:
