@@ -241,7 +241,7 @@ def main():
                         datestruct = backups[backupnum]['date']
                         inprogress = '*'
                     timestamp = time.mktime(datestruct)
-                    delta = int(time.time() - timestamp)
+                    delta = int(time.time() - timestamp + time.timezone)
                     if delta < 3600:
                         prettydelta = '%i min ago' % (delta/60)
                     elif delta < 86400:
@@ -270,7 +270,7 @@ def main():
                         else:
                             datestruct = backups[backupnum]['date']
                         timestamp = time.mktime(datestruct)
-                        delta = int(time.time() - timestamp)
+                        delta = int(time.time() - timestamp + time.timezone)
                         if delta > maxage:
                             if options.unfinalized and backups[backupnum]['finalized'] > 0:
                                 sys.stdout.write('Bypassing finalized backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
@@ -298,7 +298,7 @@ def main():
 
                     datestruct = toast['date']
                     timestamp = time.mktime(datestruct)
-                    delta = int(time.time() - timestamp)
+                    delta = int(time.time() - timestamp + time.timezone)
 
                     if options.unfinalized and toast['finalized'] > 0:
                         sys.stdout.write('Bypassing finalized backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
