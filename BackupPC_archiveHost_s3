@@ -205,11 +205,12 @@ def handle_progress(transmitted, pending):
     logging.debug('%i of %i bytes transmitted (%.2f%%)' % (transmitted, pending, (transmitted/float(pending))*100))
 
 def send_file(bucket, filename):
-    if bucket.get_key(filename):
-        logging.error('Duplicate filename %s! I hope that is OK.' % filename)
+    basefilename = os.path.basename(filename)
+    if bucket.get_key(basefilename):
+        logging.error('Duplicate filename %s! I hope that is OK.' % basefilename)
     k = MyKey(bucket)
-    k.key = os.path.basename(filename)
-    logging.info('Uploading %s...' % os.path.basename(filename))
+    k.key = basefilename
+    logging.info('Uploading %s...' % basefilename)
 
     fd = SlowFile(name=filename, mode='rb')
 
