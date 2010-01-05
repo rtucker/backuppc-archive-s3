@@ -204,12 +204,14 @@ def open_s3(accesskey, sharedkey, host):
 def handle_progress(transmitted, pending):
     logging.debug('%i of %i bytes transmitted (%.2f%%)' % (transmitted, pending, (transmitted/float(pending))*100))
 
-def send_file(bucket, filename):
+def send_file(bucket, filename, cmd, mesg):
     basefilename = os.path.basename(filename)
     if bucket.get_key(basefilename):
         logging.error('Duplicate filename %s! I hope that is OK.' % basefilename)
     k = MyKey(bucket)
     k.key = basefilename
+    if cmd: k.set_metadata('backuppc_cmd', cmd)
+    if mesg: k.set_metadata('backuppc_mesg', mesg)
     logging.info('Uploading %s...' % basefilename)
 
     fd = SlowFile(name=filename, mode='rb')
@@ -303,11 +305,8 @@ for i in sorted(glob.glob(fileglob)):
 
     while retry_count <= max_retries:
         try:
-            key = send_file(bucket, sendfile)
-            key.set_metadata('backuppc_cmd', cmd)
-            key.set_metadata('backuppc_mesg', mesg)
+            key = send_file(bucket, sendfile, cmd, mesg)
             key.set_acl('private')
-            key.update_metadata()
             key.close()
             retry_count = max_retries+1
         except boto.exception.S3ResponseError as e:
@@ -325,6 +324,7 @@ for i in sorted(glob.glob(fileglob)):
     bytespersecond = size / (sending_seconds - encrypt_seconds)
 
     sys.stdout.write('%s: File sent.  Total time %i seconds, crypto time %i seconds, transfer speed %i bytes/second.\n' % (time.strftime('%d-%H:%M:%S'), sending_seconds, encrypt_seconds, bytespersecond))
+    sys.stdout.flush()
 
 # finalize the backup
 key = MyKey(bucket)
