@@ -210,8 +210,8 @@ def send_file(bucket, filename, cmd, mesg):
         logging.error('Duplicate filename %s! I hope that is OK.' % basefilename)
     k = MyKey(bucket)
     k.key = basefilename
-    if cmd: k.set_metadata('backuppc_cmd', cmd)
-    if mesg: k.set_metadata('backuppc_mesg', mesg)
+    if cmd: k.set_metadata('backuppc-cmd', cmd)
+    if mesg: k.set_metadata('backuppc-mesg', mesg)
     logging.info('Uploading %s...' % basefilename)
 
     fd = SlowFile(name=filename, mode='rb')
@@ -312,7 +312,7 @@ for i in sorted(glob.glob(fileglob)):
         except boto.exception.S3ResponseError as e:
             retry_count += 1
             sleeptime = 2**retry_count
-            log.error('Encountered S3 exception %s, retrying in %i seconds (%i/%i)' % (e, sleeptime, retry_count, max_retries))
+            logger.error('Encountered S3 exception %s, retrying in %i seconds (%i/%i)' % (e, sleeptime, retry_count, max_retries))
             time.sleep(sleeptime)
 
     size = os.path.getsize(sendfile)
