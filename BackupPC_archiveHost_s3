@@ -48,10 +48,16 @@ class MyKey(Key):
         @return: MD5 Hash of the file in fp
         """
         m = md5.new()
-        s = fp.fastread(self.BufferSize)
+        try:
+            s = fp.fastread(self.BufferSize)
+        except AttributeError:
+            s = fp.read(self.BufferSize)
         while s:
             m.update(s)
-            s = fp.fastread(self.BufferSize)
+            try:
+                s = fp.fastread(self.BufferSize)
+            except AttributeError:
+                s = fp.read(self.BufferSize)
         self.md5 = m.hexdigest()
         self.base64md5 = base64.encodestring(m.digest())
         if self.base64md5[-1] == '\n':
