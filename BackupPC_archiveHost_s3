@@ -334,7 +334,7 @@ for i in sorted(glob.glob(fileglob)):
 
 # finalize the backup
 key = MyKey(bucket)
-key.key = '%sCOMPLETE' % filehead
+key.key = '%sCOMPLETE' % os.path.basename(filehead)
 key.set_contents_from_string('%s %s "%s"' % (beginning, time.time(), mesg))
 key.close()
 
