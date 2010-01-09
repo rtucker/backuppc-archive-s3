@@ -17,6 +17,7 @@ import glob
 import md5
 import os
 import secrets
+import socket
 import sys
 import time
 
@@ -280,8 +281,9 @@ else:
     filehead = fileglob + '.'
 
 # is there already evidence of this having been done before?
-if glob.glob(fileglob):
+if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
     logging.info('Evidence of failed execution run prior!  Finishing it.')
+    fileglob = '%s/%s.*.tar.*' % (outLoc, host)
 else:
     logging.debug('Executing %s' % cmd)
 
@@ -315,10 +317,13 @@ for i in sorted(glob.glob(fileglob)):
             key.set_acl('private')
             key.close()
             retry_count = max_retries+1
-        except boto.exception.S3ResponseError as e:
+        except boto.exception.S3ResponseError, socket.error as e:
             retry_count += 1
             sleeptime = 2**retry_count
-            logger.error('Encountered S3 exception %s, retrying in %i seconds (%i/%i)' % (e, sleeptime, retry_count, max_retries))
+            err = 'Encountered exception %s, retrying in %i seconds (%i/%i)' % (e, sleeptime, retry_count, max_retries)
+            logger.error(err)
+            sys.stdout.write(time.strftime('%d-%H:%M:%S') + ': ' + err + '\n')
+            sys.stdout.flush()
             time.sleep(sleeptime)
 
     size = os.path.getsize(sendfile)
