@@ -130,6 +130,8 @@ class SlowFile:
             if self.delayfactor > 1:
                 # reduce the penalty a bit
                 self.delayfactor -= 0.1
+                targetspeed = self.speed/float(self.delayfactor)
+                self.lastblocktargettime = time.time() + len/float(targetspeed)
 
             if self.delayfactor < 1:
                 self.delayfactor = 1
@@ -145,6 +147,7 @@ class SlowFile:
                     self.delayfactor = 1
                     self.speed = newspeed
                     logger.debug('Setting new speed! %i bytes/second' % newspeed)
+                    self.lastblocktargettime = 0
             except IOError:
                 logger.debug('No Semaphore file for new speed')
             except ValueError:
