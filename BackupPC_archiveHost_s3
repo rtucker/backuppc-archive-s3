@@ -120,13 +120,13 @@ class SlowFile:
         else:
             # we're late; something got slow.
             lateness = starttime - self.lastblocktargettime
-            self.delayfactor += lateness
+            self.delayfactor += min(0.2, lateness)
             logger.debug('%.2f seconds late (congestion?); setting delayfactor to %.2f' % (lateness, self.delayfactor))
 
         targetspeed = self.speed/float(self.delayfactor)
         self.lastblocktargettime = time.time() + len/float(targetspeed)
 
-        if time.time() > self.lastdebug+300:
+        if time.time() > self.lastdebug+60:
             if self.delayfactor > 1:
                 # reduce the penalty a bit
                 self.delayfactor -= 0.1
@@ -288,6 +288,7 @@ else:
 if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
     logging.info('Evidence of failed execution run prior!  Finishing it.')
     fileglob = '%s/%s.*.tar.*' % (outLoc, host)
+    filehead = '%s/%s.*.tar.' % (outLoc, host)
 else:
     logging.debug('Executing %s' % cmd)
 
