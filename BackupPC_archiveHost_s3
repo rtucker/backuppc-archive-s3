@@ -287,8 +287,30 @@ else:
 # is there already evidence of this having been done before?
 if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
     logging.info('Evidence of failed execution run prior!  Finishing it.')
-    fileglob = '%s/%s.*.tar.*' % (outLoc, host)
-    filehead = '%s/%s.*.tar.' % (outLoc, host)
+    somefile = os.path.basename(glob.glob('%s/%s.*.tar.*' % (outLoc, host))[0])
+    keyparts = somefile.split('.')
+    encrypted = split = tarred = final = False
+    if keyparts[-1] == 'gpg':
+        keyparts.pop()
+    if keyparts[-1] != 'tar' and len(keyparts[-1]) is 2:
+        keyparts.pop()
+    if keyparts[-1] == 'tar':
+        keyparts.pop()
+
+    bkupNum = int(keyparts.pop())
+
+    filehead = '%s/%s.%i.tar.' % (outLoc, host, bkupNum)
+    fileglob = filehead + '*'
+
+    mesg = "Continuing upload for host %s, backup #%i" % (host, bkupNum)
+    if splitSize > 0 and is_exe(splitPath):
+        mesg += ', split into %i byte chunks' % splitSize
+    if secrets.gpgsymmetrickey:
+        mesg += ', encrypted with secret key'
+
+    logging.info(mesg)
+    sys.stdout.write(time.strftime('%d-%H:%M:%S') + ": " + mesg + '\n')
+    sys.stdout.flush()
 else:
     logging.debug('Executing %s' % cmd)
 
