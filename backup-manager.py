@@ -71,12 +71,15 @@ def list_backups(bucket):
 
         if hostname in backups.keys():
             if not backupnum in backups[hostname].keys():
-                backups[hostname][backupnum] = {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': []}
+                backups[hostname][backupnum] = {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None}
         else:
-            backups[hostname] = {backupnum: {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': []}}
+            backups[hostname] = {backupnum: {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None}}
         if final:
             backups[hostname][backupnum]['finalized'] = lastmod
+            backups[hostname][backupnum]['finalkey'] = key
         else:
+            if lastmod < backups[hostname][backupnum]['date']:
+                backups[hostname][backupnum]['date'] = lastmod
             backups[hostname][backupnum]['keys'].append(key)
     return backups
 
@@ -234,11 +237,10 @@ def main():
                 backups = hostnames[hostname]
                 for backupnum in backups.keys():
                     filecount = len(backups[backupnum]['keys'])
+                    datestruct = backups[backupnum]['date']
                     if backups[backupnum]['finalized'] > 0:
-                        datestruct = backups[backupnum]['finalized']
                         inprogress = ''
                     else:
-                        datestruct = backups[backupnum]['date']
                         inprogress = '*'
                     timestamp = time.mktime(datestruct)
                     delta = int(time.time() - timestamp + time.timezone)
@@ -282,6 +284,9 @@ def main():
                                     else:
                                         key.delete()
                                         sys.stdout.write('.')
+                                if backups[backupnum]['finalkey']:
+                                    backups[backupnum]['finalkey'].delete()
+                                    sys.stdout.write('!')
                                 sys.stdout.write('\n')
         elif options.host and options.backupnum:
             for bucket in buckets:
@@ -310,6 +315,9 @@ def main():
                             else:
                                 key.delete()
                                 sys.stdout.write('.')
+                        if backups[backupnum]['finalkey']:
+                            backups[backupnum]['finalkey'].delete()
+                            sys.stdout.write('!')
                         sys.stdout.write('\n')
                 else:
                     parser.error('Host %s not found' % options.host)
