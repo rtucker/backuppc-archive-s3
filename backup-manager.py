@@ -315,8 +315,8 @@ def main():
                             else:
                                 key.delete()
                                 sys.stdout.write('.')
-                        if backups[backupnum]['finalkey']:
-                            backups[backupnum]['finalkey'].delete()
+                        if toast['finalkey']:
+                            toast['finalkey'].delete()
                             sys.stdout.write('!')
                         sys.stdout.write('\n')
                 else:
