@@ -157,6 +157,8 @@ def main():
                       help="Backup number")
     parser.add_option("-a", "--age", dest="age",
                       help="Delete backups older than AGE days")
+    parser.add_option("-k", "--keep", dest="keep",
+                      help="When used with --age, keep this many recent backups (default=1)", default=1)
     parser.add_option("-f", "--filename", dest="filename",
                       help="Output filename for script")
     parser.add_option("-x", "--expire", dest="expire",
@@ -235,7 +237,7 @@ def main():
             hostnames = list_backups(bucket)
             for hostname in hostnames.keys():
                 backups = hostnames[hostname]
-                for backupnum in backups.keys():
+                for backupnum in sorted(backups.keys()):
                     filecount = len(backups[backupnum]['keys'])
                     datestruct = backups[backupnum]['date']
                     if backups[backupnum]['finalized'] > 0:
@@ -265,7 +267,20 @@ def main():
                 hostnames = list_backups(bucket)
                 for hostname in hostnames.keys():
                     backups = hostnames[hostname]
-                    for backupnum in backups.keys():
+                    backuplist = sorted(backups.keys())
+                    # remove a number of recent backups from the delete list
+                    for i in range(1,int(options.keep)+1):
+                        if len(backuplist) > 0:
+                            backupnum = backuplist.pop()
+                            filecount = len(backups[backupnum]['keys'])
+                            if backups[backupnum]['finalized'] > 0:
+                                datestruct = backups[backupnum]['finalized']
+                            else:
+                                datestruct = backups[backupnum]['date']
+                            timestamp = time.mktime(datestruct)
+                            delta = int(time.time() - timestamp + time.timezone)
+                            sys.stdout.write('Keeping #%i-most recent backup %s #%i (%i files, age %.2f days)\n' % (i, hostname, backupnum, filecount, delta/86400.0))
+                    for backupnum in backuplist:
                         filecount = len(backups[backupnum]['keys'])
                         if backups[backupnum]['finalized'] > 0:
                             datestruct = backups[backupnum]['finalized']
