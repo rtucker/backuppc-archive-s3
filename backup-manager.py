@@ -285,8 +285,11 @@ def main():
                                         key.delete()
                                         sys.stdout.write('.')
                                 if backups[backupnum]['finalkey']:
-                                    backups[backupnum]['finalkey'].delete()
-                                    sys.stdout.write('!')
+                                    if options.test:
+                                        sys.stdout.write('X')
+                                    else:
+                                        backups[backupnum]['finalkey'].delete()
+                                        sys.stdout.write('!')
                                 sys.stdout.write('\n')
         elif options.host and options.backupnum:
             for bucket in buckets:
@@ -316,8 +319,11 @@ def main():
                                 key.delete()
                                 sys.stdout.write('.')
                         if toast['finalkey']:
-                            toast['finalkey'].delete()
-                            sys.stdout.write('!')
+                            if options.test:
+                                sys.stdout.write('X')
+                            else:
+                                toast['finalkey'].delete()
+                                sys.stdout.write('!')
                         sys.stdout.write('\n')
                 else:
                     parser.error('Host %s not found' % options.host)
