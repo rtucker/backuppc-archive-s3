@@ -120,8 +120,9 @@ class SlowFile:
         else:
             # we're late; something got slow.
             lateness = starttime - self.lastblocktargettime
-            self.delayfactor += min(0.5, lateness)
-            logger.debug('%.2f seconds late (congestion?); setting delayfactor to %.2f' % (lateness, self.delayfactor))
+            if lateness > 0.2:
+                self.delayfactor += min(0.5, lateness)
+                logger.debug('%.2f seconds late (congestion?); setting delayfactor to %.2f' % (lateness, self.delayfactor))
 
         targetspeed = self.speed/float(self.delayfactor)
         self.lastblocktargettime = time.time() + len/float(targetspeed)
@@ -129,7 +130,7 @@ class SlowFile:
         if time.time() > self.lastdebug+60:
             if self.delayfactor > 1:
                 # reduce the penalty a bit
-                self.delayfactor -= 0.1
+                self.delayfactor -= 0.2
                 targetspeed = self.speed/float(self.delayfactor)
                 self.lastblocktargettime = time.time() + len/float(targetspeed)
 
