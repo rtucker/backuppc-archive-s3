@@ -269,17 +269,21 @@ def main():
                     backups = hostnames[hostname]
                     backuplist = sorted(backups.keys())
                     # remove a number of recent backups from the delete list
-                    for i in range(1,int(options.keep)+1):
+                    to_ignore = int(options.keep)
+                    while to_ignore > 0:
                         if len(backuplist) > 0:
                             backupnum = backuplist.pop()
                             filecount = len(backups[backupnum]['keys'])
-                            if backups[backupnum]['finalized'] > 0:
-                                datestruct = backups[backupnum]['finalized']
-                            else:
-                                datestruct = backups[backupnum]['date']
+                            datestruct = backups[backupnum]['date']
                             timestamp = time.mktime(datestruct)
                             delta = int(time.time() - timestamp + time.timezone)
-                            sys.stdout.write('Keeping #%i-most recent backup %s #%i (%i files, age %.2f days)\n' % (i, hostname, backupnum, filecount, delta/86400.0))
+                            if backups[backupnum]['finalized'] == 0:
+                                sys.stdout.write('Ignoring in-progress backup %s #%i\n' % (hostname, backupnum))
+                            else:
+                                sys.stdout.write('Keeping recent backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
+                                to_ignore -= 1
+                        else:
+                            to_ignore = 0
                     for backupnum in backuplist:
                         filecount = len(backups[backupnum]['keys'])
                         if backups[backupnum]['finalized'] > 0:
@@ -289,8 +293,8 @@ def main():
                         timestamp = time.mktime(datestruct)
                         delta = int(time.time() - timestamp + time.timezone)
                         if delta > maxage:
-                            if options.unfinalized and backups[backupnum]['finalized'] > 0:
-                                sys.stdout.write('Bypassing finalized backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
+                            if not options.unfinalized and backups[backupnum]['finalized'] == 0:
+                                sys.stdout.write('Bypassing unfinalized backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
                             else:
                                 sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (hostname, backupnum, filecount, delta/86400.0))
                                 for key in backups[backupnum]['keys']:
