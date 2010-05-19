@@ -228,7 +228,9 @@ def send_file(bucket, filename, cmd, mesg):
 
     fd = SlowFile(name=filename, mode='rb')
 
-    k.set_contents_from_file(fd, cb=handle_progress)
+    putHeaders = {'x-amz-storage-class': 'REDUCED_REDUNDANCY'}
+
+    k.set_contents_from_file(fd, headers=putHeaders, cb=handle_progress)
 
     return k
  
