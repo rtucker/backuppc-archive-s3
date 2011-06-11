@@ -15,72 +15,72 @@ Installation
 I wrote this script some years ago, and can't remember how to get it going.
 But, here's going to be my best guess :-)
 
-1.  Install prerequisites
+### Install the prerequisites
 
-    You will need Python, [Boto](http://code.google.com/p/boto/), and a
-    working BackupPC installation.
+> You will need Python, [Boto](http://code.google.com/p/boto/), and a
+> working BackupPC installation.
 
-2.  Download and install this script
+### Download and install this script
 
-    Something like this seems like a good idea:
+> Something like this seems like a good idea:
+>  
+>       cd /usr/local/src/
+>       git clone git://github.com/rtucker/backuppc-archive-s3.git
+>
+> Then create a link from `/usr/share/backuppc/bin/` to here:
+>
+>       ln -s /usr/local/src/backuppc-archive-s3/BackupPC_archiveHost_s3 /usr/share/backuppc/bin/
 
-        cd /usr/local/src/
-        git clone git://github.com/rtucker/backuppc-archive-s3.git
+### Configure this script
 
-    Then create a link from `/usr/share/backuppc/bin/` to here:
+> Create a file in this directory called `secrets.py`, based upon the
+> `secrets.py.orig` file.  It should have your AWS Access and Shared keys,
+> a passphrase that will be used to encrypt the tarballs, and, optionally,
+> a path to a file that contains a maximum upload rate in kilobits per
+> second:
+> 
+>       accesskey = 'ASDIASDVINASDVASsvblahblah'
+>       sharedkey = '889rv98rv8fmasmvasdvsdvasdv'
+>       gpgsymmetrickey = 'hunter2'
+>       speedfile = '/var/cache/speedlimit.txt'
+> 
+> If you use the `speedfile` option, you can change this on the fly to
+> limit upstream bandwidth usage during peak hours, etc.
+ 
+### Configure BackupPC
 
-        ln -s /usr/local/src/backuppc-archive-s3/BackupPC_archiveHost_s3 /usr/share/backuppc/bin/
+> From the BackupPC configuration interface, go to `Edit Hosts` and add a
+> new host, `archiveS3`, which looks like the existing `archive` host.
+> Save this, select the `archives3` host, and then `Edit Config` for that
+> host.
+> 
+> Change the settings on each tab as follows:
+> 
+>> #### Xfer
+>>      XferMethod:         archive
+>>      ArchiveDest:        /var/lib/backuppc/archives3
+>>      ArchiveComp:        bzip2
+>>      ArchiveSplit:       500
+>>      ArchiveClientCmd:   $Installdir/bin/BackupPC_archiveHost_s3 $tarCreatePath $splitpath $parpath $host $backupnumber $compression $compext $splitsize $archiveloc $parfile *
+>> 
+>> #### Backup Settings
+>>      ClientTimeout:      720000
+> 
+> That should be just about it.  Note that `ArchiveDest` is where it will
+> stage the tarballs before it uploads them; this must have enough disk
+> space for your archive!  `ArchiveSplit` is the size of each tar file,
+> in megabytes; you may want to adjust this for your needs.  Also, the
+> `ArchiveClientCmd` is the default, except with the `_s3` added.
 
-3.  Configure this script
+### Use it
 
-    Create a file in this directory called `secrets.py`, based upon the
-    `secrets.py.orig` file.  It should have your AWS Access and Shared keys,
-    a passphrase that will be used to encrypt the tarballs, and, optionally,
-    a path to a file that contains a maximum upload rate in kilobits per
-    second:
-
-        accesskey = 'ASDIASDVINASDVASsvblahblah'
-        sharedkey = '889rv98rv8fmasmvasdvsdvasdv'
-        gpgsymmetrickey = 'hunter2'
-        speedfile = '/var/cache/speedlimit.txt'
-
-    If you use the `speedfile` option, you can change this on the fly to
-    limit upstream bandwidth usage during peak hours, etc.
-
-4.  Configure BackupPC
-
-    From the BackupPC configuration interface, go to `Edit Hosts` and add a
-    new host, `archiveS3`, which looks like the existing `archive` host.
-    Save this, select the `archives3` host, and then `Edit Config` for that
-    host.
-
-    Change the settings on each tab as follows:
-
-    Xfer:
-        XferMethod:         archive
-        ArchiveDest:        /var/lib/backuppc/archives3
-        ArchiveComp:        bzip2
-        ArchiveSplit:       500
-        ArchiveClientCmd:   $Installdir/bin/BackupPC_archiveHost_s3 $tarCreatePath $splitpath $parpath $host $backupnumber $compression $compext $splitsize $archiveloc $parfile *
-
-    Backup Settings:
-        ClientTimeout:      720000
-
-    That should be just about it.  Note that `ArchiveDest` is where it will
-    stage the tarballs before it uploads them; this must have enough disk
-    space for your archive!  `ArchiveSplit` is the size of each tar file,
-    in megabytes; you may want to adjust this for your needs.  Also, the
-    `ArchiveClientCmd` is the default, except with the `_s3` added.
-
-5.  Use it
-
-    Go to the main page for the `archives3` host and click `Start Archive`.
-    To start with, just tick the box next to the smallest backup you have,
-    then `Archive selected hosts`.  Go with the defaults (which look
-    suspiciously like what you set on the Xfer tab, do they not?  :-) and
-    then `Start the Archive`.
-
-    Watch syslog and hopefully everything will work.
+> Go to the main page for the `archives3` host and click `Start Archive`.
+> To start with, just tick the box next to the smallest backup you have,
+> then `Archive selected hosts`.  Go with the defaults (which look
+> suspiciously like what you set on the Xfer tab, do they not?  :-) and
+> then `Start the Archive`.
+> 
+> Watch syslog and hopefully everything will work.
 
 backup-manager.py
 -----------------
@@ -97,20 +97,20 @@ restore a backup.
 
 Each night, from `cron`, I run a script:
 
-    #!/bin/sh
-    BACKUPMGR=/path/to/backup-manager.py
+        #!/bin/sh
+        BACKUPMGR=/path/to/backup-manager.py
 
-    # Delete all backups older than 30 days.
-    $BACKUPMGR delete --age=30
+        # Delete all backups older than 30 days.
+        $BACKUPMGR delete --age=30
 
-    # Create restore scripts, valid for one week, for all of my computers
-    cd /home/rtucker/Dropbox/RestoreScripts/
-    $BACKUPMGR --expire=604800 --host=gandalf script > restore_gandalf.sh
-    $BACKUPMGR --expire=604800 --host=witte script > restore_witte.sh
-    # etc, etc
+        # Create restore scripts, valid for one week, for all of my computers
+        cd /home/rtucker/Dropbox/RestoreScripts/
+        $BACKUPMGR --expire=604800 --host=gandalf script > restore_gandalf.sh
+        $BACKUPMGR --expire=604800 --host=witte script > restore_witte.sh
+        # etc, etc
 
-    # Output a list of what's on the server
-    $BACKUPMGR
+        # Output a list of what's on the server
+        $BACKUPMGR
 
 The output of this is mailed to me, so I always know what's going on!
 
