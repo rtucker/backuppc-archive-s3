@@ -235,79 +235,37 @@ def send_file(bucket, filename, cmd, mesg):
     k.set_contents_from_file(fd, headers=putHeaders, cb=handle_progress)
 
     return k
- 
-# Read in arguments
-if len(sys.argv) != 12:
-    sys.stderr.write("Usage: %s tarCreatePath splitPath parPath host bkupNum \
-          compPath fileExt splitSize outLoc parFile share\n" % sys.argv[0])
-    sys.exit(1)
-else:
-    tarCreate   = sys.argv[1]
-    splitPath   = sys.argv[2]
-    parPath     = sys.argv[3]
-    host        = sys.argv[4]
-    bkupNum     = int(sys.argv[5])
-    compPath    = sys.argv[6]
-    fileExt     = sys.argv[7]
-    splitSize   = int(sys.argv[8])
-    outLoc      = sys.argv[9]
-    parfile     = sys.argv[10]
-    share       = sys.argv[11]
 
-for i in [tarCreate, compPath, splitPath, parPath]:
-    if i is not '' and not is_exe(i):
-        sys.stderr.write('Error: %s is not an executable program\n' % i)
+if __name__ == '__main__':
+    # Read in arguments
+    if len(sys.argv) != 12:
+        sys.stderr.write("Usage: %s tarCreatePath splitPath parPath host bkupNum \
+              compPath fileExt splitSize outLoc parFile share\n" % sys.argv[0])
         sys.exit(1)
+    else:
+        tarCreate   = sys.argv[1]
+        splitPath   = sys.argv[2]
+        parPath     = sys.argv[3]
+        host        = sys.argv[4]
+        bkupNum     = int(sys.argv[5])
+        compPath    = sys.argv[6]
+        fileExt     = sys.argv[7]
+        splitSize   = int(sys.argv[8])
+        outLoc      = sys.argv[9]
+        parfile     = sys.argv[10]
+        share       = sys.argv[11]
 
-# open s3 connection
-bucket = open_s3(secrets.accesskey, secrets.sharedkey, host)
+    for i in [tarCreate, compPath, splitPath, parPath]:
+        if i is not '' and not is_exe(i):
+            sys.stderr.write('Error: %s is not an executable program\n' % i)
+            sys.exit(1)
 
-beginning = time.time()
+    # open s3 connection
+    bucket = open_s3(secrets.accesskey, secrets.sharedkey, host)
 
-mesg = "Writing archive for host %s, backup #%i" % (host, bkupNum)
-if splitSize > 0 and is_exe(splitPath):
-    mesg += ', split into %i byte chunks' % splitSize
-if secrets.gpgsymmetrickey:
-    mesg += ', encrypted with secret key'
+    beginning = time.time()
 
-logging.info(mesg)
-sys.stdout.write(time.strftime('%d-%H:%M:%S') + ": " + mesg + '\n')
-sys.stdout.flush()
-
-# Prepare the pipeline
-if share == '*':
-    share = '\*'
-
-cmd = '%s -t -h %s -n %i -s %s . ' % (tarCreate, host, bkupNum, share)
-
-if splitSize > 0 and is_exe(splitPath):
-    filehead = '%s/%s.%i.tar.' % (outLoc, host, bkupNum)
-    fileglob = filehead + '*'
-    cmd += '| %s -b %i - %s' % (splitPath, splitSize, filehead)
-else:
-    fileglob = '%s/%s.%i.tar' % (outLoc, host, bkupNum)
-    cmd += '> %s' % fileglob
-    filehead = fileglob + '.'
-
-# is there already evidence of this having been done before?
-if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
-    logging.info('Evidence of failed execution run prior!  Finishing it.')
-    somefile = os.path.basename(glob.glob('%s/%s.*.tar.*' % (outLoc, host))[0])
-    keyparts = somefile.split('.')
-    encrypted = split = tarred = final = False
-    if keyparts[-1] == 'gpg':
-        keyparts.pop()
-    if keyparts[-1] != 'tar' and len(keyparts[-1]) is 2:
-        keyparts.pop()
-    if keyparts[-1] == 'tar':
-        keyparts.pop()
-
-    bkupNum = int(keyparts.pop())
-
-    filehead = '%s/%s.%i.tar.' % (outLoc, host, bkupNum)
-    fileglob = filehead + '*'
-
-    mesg = "Continuing upload for host %s, backup #%i" % (host, bkupNum)
+    mesg = "Writing archive for host %s, backup #%i" % (host, bkupNum)
     if splitSize > 0 and is_exe(splitPath):
         mesg += ', split into %i byte chunks' % splitSize
     if secrets.gpgsymmetrickey:
@@ -316,63 +274,104 @@ if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
     logging.info(mesg)
     sys.stdout.write(time.strftime('%d-%H:%M:%S') + ": " + mesg + '\n')
     sys.stdout.flush()
-else:
-    logging.debug('Executing %s' % cmd)
 
-    returncode = os.system(cmd)
+    # Prepare the pipeline
+    if share == '*':
+        share = '\*'
 
-    if returncode != 0:
-        logger.error('%s died with exit code %i' % (cmd, returncode))
-        sys.exit(1)
+    cmd = '%s -t -h %s -n %i -s %s . ' % (tarCreate, host, bkupNum, share)
 
-logging.info('Beginning post-processing of %i files from %s #%i' % (len(glob.glob(fileglob)), host, bkupNum))
-
-for i in sorted(glob.glob(fileglob)):
-    sending_start = time.time()
-    if secrets.gpgsymmetrickey and not i.endswith('.gpg'):
-        sendfile = encrypt_file(i, secrets.gpgsymmetrickey, compPath)
+    if splitSize > 0 and is_exe(splitPath):
+        filehead = '%s/%s.%i.tar.' % (outLoc, host, bkupNum)
+        fileglob = filehead + '*'
+        cmd += '| %s -b %i - %s' % (splitPath, splitSize, filehead)
     else:
-        # either encryption is off, or the file is already encrypted
-        sendfile = i
-    encrypt_seconds = time.time() - sending_start
+        fileglob = '%s/%s.%i.tar' % (outLoc, host, bkupNum)
+        cmd += '> %s' % fileglob
+        filehead = fileglob + '.'
 
-    # create some output so backuppc doesn't time out
-    sys.stdout.write("%s: Sending %s to S3...\n" % (time.strftime('%d-%H:%M:%S'), sendfile))
-    sys.stdout.flush()
+    # is there already evidence of this having been done before?
+    if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
+        logging.info('Evidence of failed execution run prior!  Finishing it.')
+        somefile = os.path.basename(glob.glob('%s/%s.*.tar.*' % (outLoc, host))[0])
+        keyparts = somefile.split('.')
+        encrypted = split = tarred = final = False
+        if keyparts[-1] == 'gpg':
+            keyparts.pop()
+        if keyparts[-1] != 'tar' and len(keyparts[-1]) is 2:
+            keyparts.pop()
+        if keyparts[-1] == 'tar':
+            keyparts.pop()
 
-    retry_count = 0
-    max_retries = 10
+        bkupNum = int(keyparts.pop())
 
-    while retry_count <= max_retries:
-        try:
-            key = send_file(bucket, sendfile, cmd, mesg)
-            key.set_acl('private')
-            key.close()
-            retry_count = max_retries+1
-        except (boto.exception.S3ResponseError, socket.error), e:
-            retry_count += 1
-            sleeptime = 2**retry_count
-            err = 'Encountered exception %s, retrying in %i seconds (%i/%i)' % (e, sleeptime, retry_count, max_retries)
-            logger.error(err)
-            sys.stdout.write(time.strftime('%d-%H:%M:%S') + ': ' + err + '\n')
-            sys.stdout.flush()
-            time.sleep(sleeptime)
+        filehead = '%s/%s.%i.tar.' % (outLoc, host, bkupNum)
+        fileglob = filehead + '*'
 
-    size = os.path.getsize(sendfile)
+        mesg = "Continuing upload for host %s, backup #%i" % (host, bkupNum)
+        if splitSize > 0 and is_exe(splitPath):
+            mesg += ', split into %i byte chunks' % splitSize
+        if secrets.gpgsymmetrickey:
+            mesg += ', encrypted with secret key'
 
-    os.unlink(sendfile)
+        logging.info(mesg)
+        sys.stdout.write(time.strftime('%d-%H:%M:%S') + ": " + mesg + '\n')
+        sys.stdout.flush()
+    else:
+        logging.debug('Executing %s' % cmd)
 
-    sending_seconds = time.time() - sending_start
+        returncode = os.system(cmd)
 
-    bytespersecond = size / (sending_seconds - encrypt_seconds)
+        if returncode != 0:
+            logger.error('%s died with exit code %i' % (cmd, returncode))
+            sys.exit(1)
 
-    sys.stdout.write('%s: File sent.  Total time %i seconds, crypto time %i seconds, transfer speed %i bytes/second.\n' % (time.strftime('%d-%H:%M:%S'), sending_seconds, encrypt_seconds, bytespersecond))
-    sys.stdout.flush()
+    logging.info('Beginning post-processing of %i files from %s #%i' % (len(glob.glob(fileglob)), host, bkupNum))
 
-# finalize the backup
-key = MyKey(bucket)
-key.key = '%sCOMPLETE' % os.path.basename(filehead)
-key.set_contents_from_string('%s %s "%s"' % (beginning, time.time(), mesg))
-key.close()
+    for i in sorted(glob.glob(fileglob)):
+        sending_start = time.time()
+        if secrets.gpgsymmetrickey and not i.endswith('.gpg'):
+            sendfile = encrypt_file(i, secrets.gpgsymmetrickey, compPath)
+        else:
+            # either encryption is off, or the file is already encrypted
+            sendfile = i
+        encrypt_seconds = time.time() - sending_start
 
+        # create some output so backuppc doesn't time out
+        sys.stdout.write("%s: Sending %s to S3...\n" % (time.strftime('%d-%H:%M:%S'), sendfile))
+        sys.stdout.flush()
 
+        retry_count = 0
+        max_retries = 10
+
+        while retry_count <= max_retries:
+            try:
+                key = send_file(bucket, sendfile, cmd, mesg)
+                key.set_acl('private')
+                key.close()
+                retry_count = max_retries+1
+            except (boto.exception.S3ResponseError, socket.error), e:
+                retry_count += 1
+                sleeptime = 2**retry_count
+                err = 'Encountered exception %s, retrying in %i seconds (%i/%i)' % (e, sleeptime, retry_count, max_retries)
+                logger.error(err)
+                sys.stdout.write(time.strftime('%d-%H:%M:%S') + ': ' + err + '\n')
+                sys.stdout.flush()
+                time.sleep(sleeptime)
+
+        size = os.path.getsize(sendfile)
+
+        os.unlink(sendfile)
+
+        sending_seconds = time.time() - sending_start
+
+        bytespersecond = size / (sending_seconds - encrypt_seconds)
+
+        sys.stdout.write('%s: File sent.  Total time %i seconds, crypto time %i seconds, transfer speed %i bytes/second.\n' % (time.strftime('%d-%H:%M:%S'), sending_seconds, encrypt_seconds, bytespersecond))
+        sys.stdout.flush()
+
+    # finalize the backup
+    key = MyKey(bucket)
+    key.key = '%sCOMPLETE' % os.path.basename(filehead)
+    key.set_contents_from_string('%s %s "%s"' % (beginning, time.time(), mesg))
+    key.close()
