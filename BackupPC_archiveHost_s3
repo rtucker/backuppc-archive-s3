@@ -185,10 +185,10 @@ def encrypt_file(filename, key, compress='/bin/cat'):
     cmd.extend(['--symmetric', filename])
 
     if is_exe(cmd[0]):
-        logging.info('Encrypting %s (compression: %s)' % (filename, compress_algo))
-        logging.debug(`cmd`)
+        logger.info('Encrypting %s (compression: %s)' % (filename, compress_algo))
+        logger.debug(`cmd`)
     else:
-        logging.error('%s is not an executable file!' % cmd[0])
+        logger.error('%s is not an executable file!' % cmd[0])
 
     proc = Popen(cmd, stdin=PIPE, stdout=PIPE)
     proc.communicate(key)
@@ -197,11 +197,11 @@ def encrypt_file(filename, key, compress='/bin/cat'):
         oldfilesize = os.path.getsize(filename)
         newfilesize = os.path.getsize(filename + '.gpg')
         compressed = ((oldfilesize - newfilesize) / float(oldfilesize)) * 100
-        logging.info('%s shrunk by %.2f%% (%i -> %i bytes)' % (filename, compressed, oldfilesize, newfilesize))
+        logger.info('%s shrunk by %.2f%% (%i -> %i bytes)' % (filename, compressed, oldfilesize, newfilesize))
         os.unlink(filename)
         return filename + '.gpg'
     else:
-        logging.error('%s.gpg does not exist' % filename)
+        logger.error('%s.gpg does not exist' % filename)
         raise Exception
 
 def open_s3(accesskey, sharedkey, host):
@@ -271,7 +271,7 @@ if __name__ == '__main__':
     if secrets.gpgsymmetrickey:
         mesg += ', encrypted with secret key'
 
-    logging.info(mesg)
+    logger.info(mesg)
     sys.stdout.write(time.strftime('%d-%H:%M:%S') + ": " + mesg + '\n')
     sys.stdout.flush()
 
@@ -292,7 +292,7 @@ if __name__ == '__main__':
 
     # is there already evidence of this having been done before?
     if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
-        logging.info('Evidence of failed execution run prior!  Finishing it.')
+        logger.info('Evidence of failed execution run prior!  Finishing it.')
         somefile = os.path.basename(glob.glob('%s/%s.*.tar.*' % (outLoc, host))[0])
         keyparts = somefile.split('.')
         encrypted = split = tarred = final = False
@@ -314,11 +314,11 @@ if __name__ == '__main__':
         if secrets.gpgsymmetrickey:
             mesg += ', encrypted with secret key'
 
-        logging.info(mesg)
+        logger.info(mesg)
         sys.stdout.write(time.strftime('%d-%H:%M:%S') + ": " + mesg + '\n')
         sys.stdout.flush()
     else:
-        logging.debug('Executing %s' % cmd)
+        logger.debug('Executing %s' % cmd)
 
         returncode = os.system(cmd)
 
