@@ -150,7 +150,15 @@ def make_restore_script(backup, expire=86400):
 
 def main():
     # check command line options
-    parser = optparse.OptionParser(usage="usage: %prog [options] list/delete/script")
+    parser = optparse.OptionParser(
+        usage="usage: %prog [options] [list|delete|script]",
+        description="" +
+            "Companion maintenance script for BackupPC_archiveHost_s3. " +
+            "By default, it assumes the 'list' command, which displays all " +
+            "of the backups currently archived on S3.  The 'delete' command " +
+            "is used to delete backups.  The 'script' command produces a " +
+            "script that can be used to download and restore a backup."
+        )
     parser.add_option("-H", "--host", dest="host",
                       help="Name of backed-up host")
     parser.add_option("-b", "--backup-number", dest="backupnum",
