@@ -63,10 +63,9 @@ def encrypt_file(filename, key, compress='/bin/cat'):
     cmd.extend(['--symmetric', filename])
 
     if is_exe(cmd[0]):
-        logger.info('Encrypting %s (compression: %s)' % (filename, compress_algo))
-        logger.debug(`cmd`)
+        logger.debug('encrypt_file: encrypting %s (compression: %s)' % (filename, compress_algo))
     else:
-        logger.error('%s is not an executable file!' % cmd[0])
+        raise RuntimeError('%s is not an executable file!' % cmd[0])
 
     proc = Popen(cmd, preexec_fn=lambda : os.nice(10), stdin=PIPE, stdout=PIPE)
     proc.communicate(key)
@@ -75,12 +74,11 @@ def encrypt_file(filename, key, compress='/bin/cat'):
         oldfilesize = os.path.getsize(filename)
         newfilesize = os.path.getsize(filename + '.gpg')
         compressed = ((oldfilesize - newfilesize) / float(oldfilesize)) * 100
-        logger.info('%s shrunk by %.2f%% (%i -> %i bytes)' % (filename, compressed, oldfilesize, newfilesize))
+        logger.debug('encrypt_file: %s %s by %.2f%% (%i -> %i bytes)' % (filename, 'shrunk' if oldfilesize>newfilesize else 'grew', compressed, oldfilesize, newfilesize))
         os.unlink(filename)
         return filename + '.gpg'
     else:
-        logger.error('%s.gpg does not exist' % filename)
-        raise Exception
+        raise RuntimeError('output file does not exist: %s.gpg' % filename)
 
 def open_s3(accesskey, sharedkey, host):
     conn = S3Connection(accesskey, sharedkey, is_secure=True)
@@ -88,22 +86,21 @@ def open_s3(accesskey, sharedkey, host):
     try:
         bucket = conn.get_bucket(mybucketname)
     except boto.exception.S3ResponseError:
-        logger.info('Creating bucket %s' % mybucketname)
+        logger.info('open_s3: creating new bucket %s' % mybucketname)
         bucket = conn.create_bucket(mybucketname)
     bucket.set_acl('private')
     return bucket
 
 def handle_progress(transmitted, pending):
-    logger.info('%i of %i bytes transmitted (%.2f%%)' % (transmitted, pending, (transmitted/float(pending))*100))
+    logger.debug('send_file: %i of %i bytes transmitted (%.2f%%)' % (transmitted, pending, (transmitted/float(pending))*100))
 
 def send_file(bucket, filename):
     basefilename = os.path.basename(filename)
-    logger.info('Uploading %s...' % basefilename)
 
     k = Key(bucket)
     k.key = basefilename
     if k.exists():
-        logger.warning('Duplicate filename %s! I hope that is OK.' % basefilename)
+        logger.warning('send_file: %s already exists on S3, overwriting' % basefilename)
     k.set_contents_from_filename(filename, cb=handle_progress, reduced_redundancy=True)
 
     return k
@@ -115,7 +112,7 @@ def encryption_worker(in_q, out_q):
     for filename, gpgkey, comppath in iter(in_q.get, 'STOP'):
         counter += 1
         cryptstart_time = time.time()
-        logger.info("Beginning encryption of %s.", filename)
+        logger.info("encryption_worker: encrypting %s", filename)
         result = encrypt_file(filename, gpgkey, comppath)
         out_q.put(result)
         logger.debug("encryption_worker: encrypted %s in %i seconds", filename, time.time()-cryptstart_time)
@@ -143,7 +140,7 @@ def sending_worker(in_q, out_q, accesskey, sharedkey, host):
             except (boto.exception.S3ResponseError, socket.error), e:
                 retry_count += 1
                 sleeptime = 2**retry_count
-                logger.error('Encountered exception %s, retrying in %i seconds (%i/%i)', e, sleeptime, retry_count, max_retries)
+                logger.error('sending_worker: exception %s, retrying in %i seconds (%i/%i)', e, sleeptime, retry_count, max_retries)
                 time.sleep(sleeptime)
 
         if not done:
@@ -215,7 +212,7 @@ if __name__ == '__main__':
 
     # Is there already evidence of this having been done before?
     if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
-        logger.info('Evidence of failed execution run prior!  Finishing it.')
+        logger.warning('main: finishing previous incomplete run')
         somefile = os.path.basename(glob.glob('%s/%s.*.tar.*' % (outLoc, host))[0])
         keyparts = somefile.split('.')
         encrypted = split = tarred = final = False
@@ -236,7 +233,7 @@ if __name__ == '__main__':
             mesg += ', split into %i byte chunks' % splitSize
         if secrets.gpgsymmetrickey:
             mesg += ', encrypted with secret key'
-        logger.info(mesg)
+        logger.info("main: %s", mesg)
     else:
         mesg = "Writing archive for host %s, backup #%i" % (host, bkupNum)
 
@@ -261,8 +258,8 @@ if __name__ == '__main__':
         if secrets.gpgsymmetrickey:
             mesg += ', encrypted with secret key'
 
-        logger.info(mesg)
-        logger.debug('Executing tarcmd: %s > %s', ' '.join(tarcmd), outfile)
+        logger.info("main: %s", mesg)
+        logger.debug("main: executing tarcmd: %s > %s", ' '.join(tarcmd), outfile)
 
         outfp = open(outfile, 'wb')
         proc = Popen(tarcmd, preexec_fn=lambda : os.nice(10), stdout=outfile)
@@ -270,13 +267,13 @@ if __name__ == '__main__':
         outfp.close()
 
         if splitcmd:
-            logger.debug('Splitting file using splitcmd: %s', ' '.join(splitcmd))
+            logger.debug("main: executing splitcmd: %s", ' '.join(splitcmd))
             infp = open(outfile, 'rb')
             proc = Popen(splitcmd, preexec_fn=lambda : os.nice(10), stdin=infp)
             proc.communicate()
             infp.close()
 
-    logger.info('Beginning post-processing of %i files from %s #%i' % (len(glob.glob(fileglob)), host, bkupNum))
+    logger.info("main: dumped %i files from %s #%i" % (len(glob.glob(fileglob)), host, bkupNum))
 
     # Create queues for handling encryption and file transfers
     gpg_queue = Queue()
@@ -292,18 +289,18 @@ if __name__ == '__main__':
     # Pre-run to check for artifacts
     for i in glob.glob(fileglob):
         if not i.endswith('.gpg') and os.path.exists(i + '.gpg'):
-            logger.info("Orphaned GPG file exists: %s", i + '.gpg')
+            logger.warning("main: orphaned GPG file being deleted: %s", i + '.gpg')
             os.unlink(i + '.gpg')
 
     # Run again to send files to the relevant queue
     for i in sorted(glob.glob(fileglob)):
         if secrets.gpgsymmetrickey and not i.endswith('.gpg'):
             # A tar file, unencrypted, needs encrypted.
-            logger.debug("Adding %s to gpg_queue", i)
+            logger.debug("main: adding %s to gpg_queue", i)
             gpg_queue.put([i, secrets.gpgsymmetrickey, compPath])
         else:
             # either encryption is off, or the file is already encrypted
-            logger.debug("Adding %s to send_queue", i)
+            logger.debug("main: adding %s to send_queue", i)
             send_queue.put(i)
 
     # Put a STOP command at the end of the GPG queue.
@@ -364,3 +361,5 @@ if __name__ == '__main__':
     key.set_acl('private')
     key.set_contents_from_string('%s %s "%s"' % (beginning, time.time(), mesg))
     key.close()
+
+    logger.info("main: completed run after %i seconds", (time.time() - beginning))
