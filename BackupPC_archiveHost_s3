@@ -68,7 +68,7 @@ def encrypt_file(filename, key, compress='/bin/cat'):
     else:
         logger.error('%s is not an executable file!' % cmd[0])
 
-    proc = Popen(cmd, stdin=PIPE, stdout=PIPE)
+    proc = Popen(cmd, preexec_fn=lambda : os.nice(10), stdin=PIPE, stdout=PIPE)
     proc.communicate(key)
 
     if os.path.exists(filename + '.gpg'):
@@ -178,32 +178,10 @@ if __name__ == '__main__':
 
     beginning = time.time()
 
-    mesg = "Writing archive for host %s, backup #%i" % (host, bkupNum)
-    if splitSize > 0 and is_exe(splitPath):
-        mesg += ', split into %i byte chunks' % splitSize
-    if secrets.gpgsymmetrickey:
-        mesg += ', encrypted with secret key'
-
-    logger.info(mesg)
-    sys.stdout.write(time.strftime('%d-%H:%M:%S') + ": " + mesg + '\n')
-    sys.stdout.flush()
-
-    # Prepare the pipeline
     if share == '*':
         share = '\*'
 
-    cmd = '%s -t -h %s -n %i -s %s . ' % (tarCreate, host, bkupNum, share)
-
-    if splitSize > 0 and is_exe(splitPath):
-        filehead = '%s/%s.%i.tar.' % (outLoc, host, bkupNum)
-        fileglob = filehead + '*'
-        cmd += '| %s -b %i - %s' % (splitPath, splitSize, filehead)
-    else:
-        fileglob = '%s/%s.%i.tar' % (outLoc, host, bkupNum)
-        cmd += '> %s' % fileglob
-        filehead = fileglob + '.'
-
-    # is there already evidence of this having been done before?
+    # Is there already evidence of this having been done before?
     if glob.glob('%s/%s.*.tar.*' % (outLoc, host)):
         logger.info('Evidence of failed execution run prior!  Finishing it.')
         somefile = os.path.basename(glob.glob('%s/%s.*.tar.*' % (outLoc, host))[0])
@@ -226,18 +204,45 @@ if __name__ == '__main__':
             mesg += ', split into %i byte chunks' % splitSize
         if secrets.gpgsymmetrickey:
             mesg += ', encrypted with secret key'
+        logger.info(mesg)
+    else:
+        mesg = "Writing archive for host %s, backup #%i" % (host, bkupNum)
+
+        tarcmd = [tarCreate, '-t']
+        tarcmd.extend(['-h', host])
+        tarcmd.extend(['-n', bkupNum])
+        tarcmd.extend(['-s', share])
+        tarcmd.extend(['.'])
+
+        splitcmd = None
+        outfile = '%s/%s.%i.tar' % (outLoc, host, bkupNum)
+
+        if splitSize > 0 and is_exe(splitPath):
+            filehead = outfile + '.'
+            fileglob = filehead + '*'
+            splitcmd = [splitPath, '-b', splitSize, '-', filehead]
+            mesg += ', split into %i byte chunks' % splitSize
+        else:
+            fileglob = outfile
+            filehead = fileglob + '.'
+
+        if secrets.gpgsymmetrickey:
+            mesg += ', encrypted with secret key'
 
         logger.info(mesg)
-        sys.stdout.write(time.strftime('%d-%H:%M:%S') + ": " + mesg + '\n')
-        sys.stdout.flush()
-    else:
-        logger.debug('Executing %s' % cmd)
+        logger.debug('Executing tarcmd: %s > %s', ' '.join(tarcmd), outfile)
 
-        returncode = os.system(cmd)
+        outfp = open(outfile, 'wb')
+        proc = Popen(tarcmd, preexec_fn=lambda : os.nice(10), stdout=outfile)
+        proc.communicate()
+        outfp.close()
 
-        if returncode != 0:
-            logger.error('%s died with exit code %i' % (cmd, returncode))
-            sys.exit(1)
+        if splitcmd:
+            logger.debug('Splitting file using splitcmd: %s', ' '.join(splitcmd))
+            infp = open(outfile, 'rb')
+            proc = Popen(splitcmd, preexec_fn=lambda : os.nice(10), stdin=infp)
+            proc.communicate()
+            infp.close()
 
     logger.info('Beginning post-processing of %i files from %s #%i' % (len(glob.glob(fileglob)), host, bkupNum))
 
@@ -245,8 +250,16 @@ if __name__ == '__main__':
     gpg_queue = Queue()
     send_queue = Queue()
 
-    for i in sorted(glob.glob(fileglob)):
+    # Pre-run to check for artifacts
+    for i in glob.glob(fileglob):
+        if not i.endswith('.gpg') and os.path.exists(i + '.gpg'):
+            logger.info("Orphaned GPG file exists: %s", i + '.gpg')
+            os.unlink(i + '.gpg')
+
+    # Run again to send files to the relevant queue
+    for i in glob.glob(fileglob):
         if secrets.gpgsymmetrickey and not i.endswith('.gpg'):
+            # A tar file, unencrypted, needs encrypted.
             logger.debug("Adding %s to gpg_queue", i)
             gpg_queue.put([i, secrets.gpgsymmetrickey, compPath])
         else:
@@ -282,8 +295,7 @@ if __name__ == '__main__':
     if not send_queue.empty():
         raise Exception("Send queue not empty")
 
-    sys.stdout.write("Reached end of queue!  Finalizing backup.\n")
-    sys.stdout.flush()
+    logger.info("Finalizing backup.")
 
     # finalize the backup
     bucket = open_s3(secrets.accesskey, secrets.sharedkey, host)
