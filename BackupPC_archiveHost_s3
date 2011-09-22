@@ -83,7 +83,7 @@ def encrypt_file(filename, key, compress='/bin/cat'):
         raise Exception
 
 def open_s3(accesskey, sharedkey, host):
-    conn = S3Connection(accesskey, sharedkey, is_secure=False)
+    conn = S3Connection(accesskey, sharedkey, is_secure=True)
     mybucketname = (accesskey + '-bkup-' + host).lower()
     try:
         bucket = conn.get_bucket(mybucketname)
@@ -98,14 +98,14 @@ def handle_progress(transmitted, pending):
 
 def send_file(bucket, filename):
     basefilename = os.path.basename(filename)
-    if bucket.get_key(basefilename):
-        logger.error('Duplicate filename %s! I hope that is OK.' % basefilename)
+    logger.info('Uploading %s...' % basefilename)
+
     k = Key(bucket)
     k.key = basefilename
-    logger.info('Uploading %s...' % basefilename)
-    fd = open(name=filename, mode='rb')
-    putHeaders = {'x-amz-storage-class': 'REDUCED_REDUNDANCY'}
-    k.set_contents_from_file(fd, headers=putHeaders, cb=handle_progress)
+    if k.exists():
+        logger.warning('Duplicate filename %s! I hope that is OK.' % basefilename)
+    k.set_contents_from_filename(filename, cb=handle_progress, reduced_redundancy=True)
+
     return k
 
 def encryption_worker(in_q, out_q):
