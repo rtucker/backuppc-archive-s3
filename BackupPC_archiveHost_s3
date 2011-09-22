@@ -11,13 +11,10 @@
 # accesskey = 'amazon aws access key'
 # sharedkey = 'amazon aws shared key'
 # gpgsymmetrickey = 'gpg symmetric key -- make it good, but do not lose it'
-# speedfile = '/path/to/a/speed-limit-file'
 
-import base64
 import glob
-import md5
+import hashlib
 import os
-import secrets
 import socket
 import sys
 import time
@@ -32,12 +29,21 @@ import boto.exception
 import logging
 import logging.handlers
 
-logger = logging.getLogger('')
-loghandler = logging.handlers.SysLogHandler('/dev/log',
+import secrets
+
+logger = logging.getLogger(__name__)
+
+sysloghandler = logging.handlers.SysLogHandler('/dev/log',
                 facility=logging.handlers.SysLogHandler.LOG_DAEMON)
-logformatter = logging.Formatter('%(filename)s: %(levelname)s: %(message)s')
-loghandler.setFormatter(logformatter)
-logger.addHandler(loghandler)
+syslogformatter = logging.Formatter('%(filename)s: %(levelname)s: %(message)s')
+sysloghandler.setFormatter(syslogformatter)
+logger.addHandler(sysloghandler)
+
+consolehandler = logging.StreamHandler(sys.stdout)
+consoleformatter = logging.Formatter('%(asctime)s: %(levelname)s: %(message)s')
+consolehandler.setFormatter(consoleformatter)
+logger.addHandler(consolehandler)
+
 logger.setLevel(logging.DEBUG)
 
 def is_exe(fpath):
@@ -88,7 +94,7 @@ def open_s3(accesskey, sharedkey, host):
     return bucket
 
 def handle_progress(transmitted, pending):
-    logger.debug('%i of %i bytes transmitted (%.2f%%)' % (transmitted, pending, (transmitted/float(pending))*100))
+    logger.info('%i of %i bytes transmitted (%.2f%%)' % (transmitted, pending, (transmitted/float(pending))*100))
 
 def send_file(bucket, filename):
     basefilename = os.path.basename(filename)
@@ -113,7 +119,7 @@ def encryption_worker(in_q, out_q):
         result = encrypt_file(filename, gpgkey, comppath)
         out_q.put(result)
         logger.info("Finished encryption of %s in %i seconds.", filename, time.time()-cryptstart_time)
-    logger.info("Encryption worker dying after %i tasks in %i seconds.", counter, time.time()-start_time)
+    logger.info("Finished processing %i items in encryption queue in %i seconds.", counter, time.time()-start_time)
     out_q.put('STOP')
 
 def sending_worker(in_q, accesskey, sharedkey, host):
@@ -148,10 +154,9 @@ def sending_worker(in_q, accesskey, sharedkey, host):
         logger.info("Finished sending of %s in %i seconds, transfer speed %i bytes/second.", filename, sending_seconds, bytespersecond)
 
 if __name__ == '__main__':
-    # Read in arguments
+    # Read in arguments, verify that they match the BackupPC standard exactly
     if len(sys.argv) != 12:
-        sys.stderr.write("Usage: %s tarCreatePath splitPath parPath host bkupNum \
-              compPath fileExt splitSize outLoc parFile share\n" % sys.argv[0])
+        sys.stderr.write("Usage: %s tarCreatePath splitPath parPath host bkupNum compPath fileExt splitSize outLoc parFile share\n" % sys.argv[0])
         sys.exit(1)
     else:
         tarCreate   = sys.argv[1]
