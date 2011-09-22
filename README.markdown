@@ -20,6 +20,11 @@ But, here's going to be my best guess :-)
 > You will need Python, [Boto](http://code.google.com/p/boto/), and a
 > working BackupPC installation.
 
+> Note: Python 2.6+ and Boto 2.0+ are required for recent changes, which
+> include multiprocessing support.  I may make these optional later on,
+> but until then, tag stable-20110610 is what was running before I decided
+> to mess with things!
+
 ### Download and install this script
 
 > Something like this seems like a good idea:
@@ -35,17 +40,18 @@ But, here's going to be my best guess :-)
 
 > Create a file in this directory called `secrets.py`, based upon the
 > `secrets.py.orig` file.  It should have your AWS Access and Shared keys,
-> a passphrase that will be used to encrypt the tarballs, and, optionally,
-> a path to a file that contains a maximum upload rate in kilobits per
-> second:
+> a passphrase that will be used to encrypt the tarballs.
 > 
 >       accesskey = 'ASDIASDVINASDVASsvblahblah'
 >       sharedkey = '889rv98rv8fmasmvasdvsdvasdv'
 >       gpgsymmetrickey = 'hunter2'
->       speedfile = '/var/cache/speedlimit.txt'
-> 
-> If you use the `speedfile` option, you can change this on the fly to
-> limit upstream bandwidth usage during peak hours, etc.
+>
+> Previously, you could use a `speedfile` to change the permitted upstream
+> bandwidth on the fly.  This was cantankerous and was ultimately dropped
+> in September 2011.  See tag stable-20110610 if you need this functionality
+> (and open an issue to let me know!), or take a look at
+> [The Wonder Shaper](http://lartc.org/wondershaper/) to limit throughput
+> on a system-wide level.
  
 ### Configure BackupPC
 
@@ -80,7 +86,9 @@ But, here's going to be my best guess :-)
 > suspiciously like what you set on the Xfer tab, do they not?  :-) and
 > then `Start the Archive`.
 > 
-> Watch syslog and hopefully everything will work.
+> Watch syslog and hopefully everything will work.  If it does not, there
+> will be decent debugging output in the archive job's log, viewable via
+> the BackupPC console.
 
 backup-manager.py
 -----------------
@@ -128,3 +136,15 @@ FAQs
     are one-off scripts that solve a very specific need I have, and I don't
     put too much thought into making them useful for other people.  This
     script works for me and (sorta) meets my needs, so that's where it is.
+
+*   What changed in September 2011?
+
+    I got tired of seeing a square-wave pattern on my throughput graphs,
+    and so I modified the system to use Python's
+    [multiprocessing](http://docs.python.org/library/multiprocessing.html)
+    library.  It will now run GPG encryption jobs in the background,
+    with as many CPUs as you have available, while transmitting files.
+
+    This probably isn't a problem for anyone else, but my BackupPC server
+    is slow (exactly one "Intel(R) Pentium(R) 4 CPU 1.70GHz") and is
+    behind a very asymmetric cable modem connection.
