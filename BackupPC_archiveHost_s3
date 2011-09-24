@@ -188,22 +188,8 @@ def unlink_worker(in_q, accesskey, sharedkey, host):
     bucket = open_s3(accesskey, sharedkey, host)
     for filename in iter(in_q.get, 'STOP'):
         counter += 1
-        retry_count = 0
-        max_retries = 3
-        done = False
-        while retry_count <= max_retries and not done:
-            if verify_file(bucket, filename):
-                logger.debug("unlink_worker: deleting %s", filename)
-                os.unlink(filename)
-                done = True
-            else:
-                retry_count += 1
-                sleeptime = 2**retry_count
-                logger.error("unlink_worker: verify_file on %s returned false, retrying in %i seconds (%i/%i)", filename, sleeptime, retry_count, max_retries)
-                time.sleep(sleeptime)
-
-        if not done:
-            logger.error("unlink_worker: could not verify remote %s in %i retries", filename, retry_count)
+        logger.debug("unlink_worker: deleting %s", filename)
+        os.unlink(filename)
 
     logger.debug("unlink_worker: queue is empty, terminating after %i items in %i seconds", counter, time.time() - start_time)
     time.sleep(5)   # settle
