@@ -332,7 +332,7 @@ if __name__ == '__main__':
     send_p.start()
     procs.append(send_p)
 
-    unlink_p = Process(name="unlink_worker", target=unlink_worker, args=(unlink_queue))
+    unlink_p = Process(name="unlink_worker", target=unlink_worker, args=(unlink_queue,))
     unlink_p.start()
     procs.append(unlink_p)
 
