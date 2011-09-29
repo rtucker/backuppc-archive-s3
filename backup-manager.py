@@ -3,6 +3,8 @@
 # Script to manage S3-stored backups
 
 import optparse
+import os
+import pwd
 import secrets
 import sys
 import time
@@ -10,6 +12,8 @@ import time
 from boto.s3.connection import S3Connection
 from boto.s3.key import Key
 import boto.exception
+
+from subprocess import *
 
 def open_s3(accesskey, sharedkey):
     return S3Connection(accesskey, sharedkey)
@@ -148,6 +152,23 @@ def make_restore_script(backup, expire=86400):
 
     return output
 
+def start_archive(hosts):
+    "Starts an archive operation for a list of hosts."
+    if 'LOGNAME' in os.environ:
+        username = os.environ['LOGNAME']
+    else:
+        try:
+            username = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError:
+            username = 'nobody'
+
+    cmd = ['/usr/share/backuppc/bin/BackupPC_archiveStart', 'archives3',
+           username]
+    cmd.extend(hosts)
+
+    proc = Popen(cmd)
+    proc.communicate()
+
 def main():
     # check command line options
     parser = optparse.OptionParser(
@@ -175,6 +196,8 @@ def main():
                       help="Test mode; don't actually delete")
     parser.add_option("-u", "--unfinalized", dest="unfinalized",
                       action="store_true", help="Consider unfinalized backups")
+    parser.add_option("-s", "--start-backups", dest="start",
+                      action="store_true", help="When used with --age, start backups for hosts with fewer than keep+1 backups")
 
     (options, args) = parser.parse_args()
 
@@ -194,6 +217,9 @@ def main():
 
     if args[0] != 'delete' and options.age:
         parser.error('--age only makes sense with delete')
+
+    if options.start and not (args[0] == 'delete' and options.age):
+        parser.error('--start-backups only makes sense with delete and --age')
 
     if args[0] != 'script' and (options.expire or options.filename):
         parser.error('--expire and --filename only make sense with script')
@@ -271,11 +297,13 @@ def main():
     elif args[0] == 'delete':
         if options.age:
             maxage = int(options.age)*86400
+            needs_backup = []
             for bucket in buckets:
                 hostnames = list_backups(bucket)
                 for hostname in hostnames.keys():
                     backups = hostnames[hostname]
                     backuplist = sorted(backups.keys())
+                    oldest_timestamp = -1
                     # remove a number of recent backups from the delete list
                     to_ignore = int(options.keep)
                     while to_ignore > 0:
@@ -289,9 +317,12 @@ def main():
                                 sys.stdout.write('Ignoring in-progress backup %s #%i\n' % (hostname, backupnum))
                             else:
                                 sys.stdout.write('Keeping recent backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
+                                if timestamp < oldest_timestamp:
+                                    oldest_timestamp = timestamp
                                 to_ignore -= 1
                         else:
                             to_ignore = 0
+                    deletes = 0
                     for backupnum in backuplist:
                         filecount = len(backups[backupnum]['keys'])
                         if backups[backupnum]['finalized'] > 0:
@@ -318,6 +349,12 @@ def main():
                                         backups[backupnum]['finalkey'].delete()
                                         sys.stdout.write('!')
                                 sys.stdout.write('\n')
+                                deletes += 1
+                    if (len(backuplist)-deletes) < int(options.keep):
+                        needs_backup.append((oldest_timestamp, hostname))
+            if options.start and len(needs_backup) > 0:
+                sys.stdout.write('Starting archive operations for hosts: %s\n' % ', '.join(x[1] for x in sorted(needs_backup)))
+                start_archive([x[1] for x in sorted(needs_backup)])
         elif options.host and options.backupnum:
             for bucket in buckets:
                 hostnames = list_backups(bucket)
