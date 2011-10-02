@@ -100,7 +100,7 @@ my %ArchiveReq = (
     compext     => $bpc->{Conf}{ArchiveComp} eq 'none' ? ''
                     : ($bpc->{Conf}{ArchiveComp} eq 'gzip' ? '.gz' : '.bz2'),
     parfile     => $bpc->{Conf}{ArchivePar},
-    splitsize   => '0000000',
+    splitsize   => $bpc->{Conf}{ArchiveSplit} * 1000000,
     host        => $ArchiveHost,
     HostList    => \@HostList,
     BackupList  => \@BackupList,

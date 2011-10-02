@@ -182,7 +182,9 @@ def start_archive(hosts):
         except KeyError:
             username = 'nobody'
 
-    cmd = ['/usr/share/backuppc/bin/BackupPC_archiveStart', 'archives3',
+    scriptdir = os.path.dirname(sys.argv[0])
+
+    cmd = [os.path.join(scriptdir, 'BackupPC_archiveStart'), 'archives3',
            username]
     cmd.extend(hosts)
 
