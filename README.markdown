@@ -7,7 +7,7 @@ This is a Python script that acts as an interface between
 [archive function](http://backuppc.sourceforge.net/faq/BackupPC.html#archive_functions)
 to extract a tarball and split it into chunks, like the normal archive
 function.  Then, the chunks are encrypted using gpg and transmitted to
-S3 using [Boto](http://code.google.com/p/boto/).
+S3 using [Boto](https://github.com/boto/boto).
 
 Installation
 ------------
@@ -17,7 +17,7 @@ But, here's going to be my best guess :-)
 
 ### Install the prerequisites
 
-> You will need Python, [Boto](http://code.google.com/p/boto/), and a
+> You will need Python, [Boto](https://github.com/boto/boto), and a
 > working BackupPC installation.
 
 > Note: Python 2.6+ and Boto 2.0+ are required for recent changes, which
