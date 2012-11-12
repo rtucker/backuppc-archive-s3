@@ -88,7 +88,11 @@ def list_backups(bucket):
                 tarred = True
                 keyparts.pop()
 
-        backupnum = int(keyparts.pop())
+        nextpart = keyparts.pop()
+        if nextpart == 'COMPLETE':
+            print("Stray file: %s" % key.key)
+            continue
+        backupnum = int(nextpart)
         hostname = '.'.join(keyparts)
 
         lastmod = time.strptime(key.last_modified, '%Y-%m-%dT%H:%M:%S.000Z')

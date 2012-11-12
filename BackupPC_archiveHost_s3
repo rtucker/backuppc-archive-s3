@@ -326,7 +326,9 @@ if __name__ == '__main__':
 
     # Run again to send files to the relevant queue
     for i in sorted(glob.glob(fileglob)):
-        if secrets.gpgsymmetrickey and not i.endswith('.gpg'):
+        if (secrets.gpgsymmetrickey
+                and not i.endswith('.gpg')
+                and not i.endswith('.COMPLETE')):
             # A tar file, unencrypted, needs encrypted.
             logger.debug("main: adding %s to gpg_queue", i)
             gpg_queue.put([i, secrets.gpgsymmetrickey, compPath])
