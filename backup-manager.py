@@ -37,93 +37,133 @@ from collections import defaultdict
 from math import log10
 from subprocess import *
 
-def open_s3(accesskey, sharedkey):
-    return S3Connection(accesskey, sharedkey)
+class BackupManager:
+    def __init__(self, accesskey, sharedkey):
+        self._accesskey = accesskey
+        self._connection = S3Connection(accesskey, sharedkey)
 
-def iter_backup_buckets(conn, name=None):
-    """Yields an iterator of buckets that probably have backups in them."""
+        self._buckets = None
+        self._bucketbackups = {}
+        self._backups = None
 
-    bucket_prefix = secrets.accesskey.lower() + '-bkup-'
-    if name:
-        bucket_prefix += name
+    def _generate_backup_buckets(self):
+        bucket_prefix = self._accesskey.lower() + '-bkup-'
+        buckets = self._connection.get_all_buckets()
+        self._buckets = []
 
-    buckets = conn.get_all_buckets()
+        for bucket in buckets:
+            if bucket.name.startswith(bucket_prefix):
+                self._buckets.append(bucket)
 
-    for bucket in buckets:
-        if bucket.name.startswith(bucket_prefix):
-            yield bucket
+    @property
+    def backup_buckets(self):   # property
+        if self._buckets is None:
+            self._generate_backup_buckets()
+        return self._buckets
 
-def list_backups(bucket):
-    """Returns a dict of backups in a bucket, with dicts of:
-    {hostname (str):
-        {Backup number (int):
-            {'date': Timestamp of backup (int),
-             'keys': A list of keys comprising the backup,
-             'hostname': Hostname (str),
-             'backupnum': Backup number (int),
-             'finalized': 0, or the timestamp the backup was finalized
+    def _list_backups(self, bucket):
+        """Returns a dict of backups in a bucket, with dicts of:
+        {hostname (str):
+            {Backup number (int):
+                {'date': Timestamp of backup (int),
+                 'keys': A list of keys comprising the backup,
+                 'hostname': Hostname (str),
+                 'backupnum': Backup number (int),
+                 'finalized': 0, or the timestamp the backup was finalized
+                }
             }
         }
-    }
-    """
+        """
 
-    backups = {}
+        backups = {}
 
-    for key in bucket.list():
-        keyparts = key.key.split('.')
-        encrypted = split = tarred = final = False
+        for key in bucket.list():
+            keyparts = key.key.split('.')
+            encrypted = split = tarred = final = False
 
-        if keyparts[-1] == 'COMPLETE':
-            final = True
-            keyparts.pop() # back to tar
-            keyparts.pop() # back to backup number
-        else:
-            if keyparts[-1] == 'gpg':
-                encrypted = True
-                keyparts.pop()
+            if keyparts[-1] == 'COMPLETE':
+                final = True
+                keyparts.pop() # back to tar
+                keyparts.pop() # back to backup number
+            else:
+                if keyparts[-1] == 'gpg':
+                    encrypted = True
+                    keyparts.pop()
 
-            if keyparts[-1] != 'tar' and len(keyparts[-1]) is 2:
-                split = True
-                keyparts.pop()
+                if keyparts[-1] != 'tar' and len(keyparts[-1]) is 2:
+                    split = True
+                    keyparts.pop()
 
-            if keyparts[-1] == 'tar':
-                tarred = True
-                keyparts.pop()
+                if keyparts[-1] == 'tar':
+                    tarred = True
+                    keyparts.pop()
 
-        nextpart = keyparts.pop()
-        if nextpart == 'COMPLETE':
-            print("Stray file: %s" % key.key)
-            continue
-        backupnum = int(nextpart)
-        hostname = '.'.join(keyparts)
+            nextpart = keyparts.pop()
+            if nextpart == 'COMPLETE':
+                print("Stray file: %s" % key.key)
+                continue
+            backupnum = int(nextpart)
+            hostname = '.'.join(keyparts)
 
-        lastmod = time.strptime(key.last_modified, '%Y-%m-%dT%H:%M:%S.000Z')
+            lastmod = time.strptime(key.last_modified, '%Y-%m-%dT%H:%M:%S.000Z')
 
-        if hostname in backups.keys():
-            if not backupnum in backups[hostname].keys():
-                backups[hostname][backupnum] = {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None, 'finalized_age': -1}
-        else:
-            backups[hostname] = {backupnum: {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None, 'finalized_age': -1}}
-        if final:
-            backups[hostname][backupnum]['finalized'] = lastmod
-            backups[hostname][backupnum]['finalkey'] = key
-            timestamp = time.mktime(lastmod)
-            delta = int(time.time() - timestamp + time.timezone)
-            backups[hostname][backupnum]['finalized_age'] = delta 
-        else:
-            if lastmod < backups[hostname][backupnum]['date']:
-                backups[hostname][backupnum]['date'] = lastmod
-            backups[hostname][backupnum]['keys'].append(key)
-    return backups
+            if hostname in backups.keys():
+                if not backupnum in backups[hostname].keys():
+                    backups[hostname][backupnum] = {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None, 'finalized_age': -1}
+            else:
+                backups[hostname] = {backupnum: {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None, 'finalized_age': -1}}
+            if final:
+                backups[hostname][backupnum]['finalized'] = lastmod
+                backups[hostname][backupnum]['finalkey'] = key
+                timestamp = time.mktime(lastmod)
+                delta = int(time.time() - timestamp + time.timezone)
+                backups[hostname][backupnum]['finalized_age'] = delta 
+            else:
+                if lastmod < backups[hostname][backupnum]['date']:
+                    backups[hostname][backupnum]['date'] = lastmod
+                backups[hostname][backupnum]['keys'].append(key)
+        return backups
 
-def backups_by_age(conn, name=None):
-    "Returns a dict of {hostname: [(backupnum, age), ...]}"
-    results = defaultdict(list)
-    for bucket in iter_backup_buckets(conn, name=name):
-        for hostname, backups in list_backups(bucket).items():
+    def get_backups_by_bucket(self, bucket):
+        if bucket.name not in self._bucketbackups:
+            self._bucketbackups[bucket.name] = self._list_backups(bucket)
+
+        return self._bucketbackups[bucket.name]
+
+    @property
+    def all_backups(self):  # property
+        if self._backups is None:
+            sys.stderr.write("Enumerating backups")
+            self._backups = {}
+            for bucket in self.backup_buckets:
+                for hostname, backups in self.get_backups_by_bucket(bucket).items():
+                    sys.stderr.write('.')
+                    sys.stderr.flush()
+                    if hostname not in self._backups:
+                        self._backups[hostname] = {}
+                    self._backups[hostname].update(backups)
+            sys.stderr.write("\n")
+        return self._backups
+
+    def invalidate_host_cache(self, hostname):
+        nuke = []
+        for bucket in self._bucketbackups:
+            if hostname in self._bucketbackups[bucket]:
+                nuke.append(bucket)
+
+        for bucket in nuke:
+            if bucket in self._bucketbackups:
+                del self._bucketbackups[bucket]
+                self._backups = None
+
+    @property
+    def backups_by_age(self):   # property
+        "Returns a dict of {hostname: [(backupnum, age), ...]}"
+        results = defaultdict(list)
+        for hostname, backups in self.all_backups.items():
             for backupnum, statusdict in backups.items():
                 results[hostname].append((backupnum, statusdict['finalized_age']))
-    return results
+        return results
 
 def choose_host_to_backup(agedict, target_count=2):
     "Takes a dict from backups_by_age, returns a hostname to back up."
@@ -149,6 +189,24 @@ def choose_host_to_backup(agedict, target_count=2):
 
     for candidate, score in sorted(host_scores.items(), key=lambda x: x[1], reverse=True):
         yield (candidate, score)
+
+def choose_backups_to_delete(agedict, target_count=2, max_age=30):
+    "Takes a dict from backups_by_age, returns a list of backups to delete"
+
+    decimate = defaultdict(list)
+
+    for hostname, backuplist in agedict.items():
+        bl = []
+        for backup in sorted(backuplist, key=lambda x: x[1]):
+            if backup[1] > 0:
+                bl.append(backup)
+
+        while len(bl) > target_count:
+            backup = bl.pop()
+            if backup[1] > max_age*24*60*60:
+                decimate[hostname].append(backup)
+
+    return decimate
 
 def iter_urls(keyset, expire=86400):
     """Given a list of keys and an optional expiration time (in seconds),
@@ -263,10 +321,11 @@ def main():
                       action="store_true", help="Consider unfinalized backups")
     parser.add_option("-s", "--start-backups", dest="start",
                       action="store_true", help="When used with --age, start backups for hosts with fewer than keep+1 backups")
+    parser.add_option("-l", "--list", dest="list", action="store_true", help="List stored backups after completing operations")
 
     (options, args) = parser.parse_args()
 
-    conn = open_s3(secrets.accesskey, secrets.sharedkey)
+    bmgr = BackupManager(secrets.accesskey, secrets.sharedkey)
 
     if options.backupnum and not options.host:
         parser.error('Must specify --host when specifying --backup-number')
@@ -274,10 +333,6 @@ def main():
     if options.backupnum:
         options.backupnum = int(options.backupnum)
 
-    # TODO: refactor this somewhere better
-    backups_by_age_list = backups_by_age(conn)
-    score_iter = choose_host_to_backup(backups_by_age_list, target_count=int(options.keep))
-    
     if len(args) == 0:
         args.append('list')
 
@@ -295,12 +350,10 @@ def main():
 
     if args[0] in ['list', 'script', 'delete']:
         if options.host:
-            buckets = iter_backup_buckets(conn, name=options.host)
-            if not buckets:
-                parser.error('No buckets found for host "%s"' % options.host)
+            if options.host not in bmgr.all_backups:
+                parser.error('No backups found for host "%s"' % options.host)
         else:
-            buckets = iter_backup_buckets(conn)
-            if not buckets:
+            if len(bmgr.all_backups) == 0:
                 parser.error('No buckets found!')
     else:
         parser.error('Invalid option: %s' + args[0])
@@ -309,21 +362,19 @@ def main():
         if not options.host:
             parser.error('Must specify --host to generate a script for')
 
-        backups = list_backups(buckets.next())
-
         if not options.backupnum and options.unfinalized:
             # assuming highest number
-            options.backupnum = max(backups[options.host].keys())
+            options.backupnum = max(bmgr.all_backups[options.host].keys())
         elif not options.backupnum:
             # assuming highest finalized number
             options.backupnum = 0
-            for backup in backups[options.host].keys():
-                if backups[options.host][backup]['finalized'] > 0:
+            for backup in bmgr.all_backups[options.host].keys():
+                if bmgr.all_backups[options.host][backup]['finalized'] > 0:
                     options.backupnum = max(options.backupnum, backup)
             if options.backupnum == 0:
                 parser.error('No finalized backups found!  Try --unfinalized if you dare')
 
-        backup = backups[options.host][options.backupnum]
+        backup = bmgr.all_backups[options.host][options.backupnum]
 
         if not options.expire:
             options.expire = "86400"
@@ -333,143 +384,82 @@ def main():
             fd.writelines(make_restore_script(backup, expire=int(options.expire)))
         else:
             sys.stdout.writelines(make_restore_script(backup, expire=int(options.expire)))
-    elif args[0] == 'list':
-        sys.stdout.write('%25s | %5s | %20s | %5s\n' % ("Hostname", "Bkup#", "Age", "Files"))
-        sys.stdout.write('-'*72 + '\n')
-        for bucket in buckets:
-            hostnames = list_backups(bucket)
-            for hostname in hostnames.keys():
-                backups = hostnames[hostname]
-                for backupnum in sorted(backups.keys()):
-                    filecount = len(backups[backupnum]['keys'])
-                    datestruct = backups[backupnum]['date']
-                    if backups[backupnum]['finalized'] > 0:
-                        inprogress = ''
-                    else:
-                        inprogress = '*'
-                    timestamp = time.mktime(datestruct)
-                    delta = int(time.time() - timestamp + time.timezone)
-                    if delta < 3600:
-                        prettydelta = '%i min ago' % (delta/60)
-                    elif delta < 86400:
-                        prettydelta = '%i hr ago' % (delta/3600)
-                    else:
-                        days = int(delta/60/60/24)
-                        if days == 1:
-                            s = ''
-                        else:
-                            s = 's'
-                        prettydelta = '%i day%s ago' % (days, s)
-
-                    sys.stdout.write('%25s | %5i | %20s | %5i%s\n' % (hostname, backupnum, prettydelta, filecount, inprogress))
-        sys.stdout.write('* == not yet finalized (Age == time of last activity)\n')
     elif args[0] == 'delete':
-        if options.age:
-            maxage = int(options.age)*86400
-            needs_backup = []
-            for bucket in buckets:
-                hostnames = list_backups(bucket)
-                for hostname in hostnames.keys():
-                    backups = hostnames[hostname]
-                    backuplist = sorted(backups.keys())
-                    oldest_timestamp = -1
-                    # remove a number of recent backups from the delete list
-                    to_ignore = int(options.keep)
-                    while to_ignore > 0:
-                        if len(backuplist) > 0:
-                            backupnum = backuplist.pop()
-                            filecount = len(backups[backupnum]['keys'])
-                            datestruct = backups[backupnum]['date']
-                            timestamp = time.mktime(datestruct)
-                            delta = int(time.time() - timestamp + time.timezone)
-                            if backups[backupnum]['finalized'] == 0:
-                                sys.stdout.write('Ignoring in-progress backup %s #%i\n' % (hostname, backupnum))
-                            else:
-                                sys.stdout.write('Keeping recent backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
-                                if timestamp < oldest_timestamp:
-                                    oldest_timestamp = timestamp
-                                to_ignore -= 1
-                        else:
-                            to_ignore = 0
-                    deletes = 0
-                    for backupnum in backuplist:
-                        filecount = len(backups[backupnum]['keys'])
-                        if backups[backupnum]['finalized'] > 0:
-                            datestruct = backups[backupnum]['finalized']
-                        else:
-                            datestruct = backups[backupnum]['date']
-                        timestamp = time.mktime(datestruct)
-                        delta = int(time.time() - timestamp + time.timezone)
-                        if delta > maxage:
-                            if not options.unfinalized and backups[backupnum]['finalized'] == 0:
-                                sys.stdout.write('Bypassing unfinalized backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
-                            else:
-                                sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (hostname, backupnum, filecount, delta/86400.0))
-                                for key in backups[backupnum]['keys']:
-                                    if options.test:
-                                        sys.stdout.write('*')
-                                    else:
-                                        key.delete()
-                                        sys.stdout.write('.')
-                                if backups[backupnum]['finalkey']:
-                                    if options.test:
-                                        sys.stdout.write('X')
-                                    else:
-                                        backups[backupnum]['finalkey'].delete()
-                                        sys.stdout.write('!')
-                                sys.stdout.write('\n')
-                                deletes += 1
-                    if (len(backuplist)-deletes) < int(options.keep):
-                        needs_backup.append((oldest_timestamp, hostname))
-            #if options.start and len(needs_backup) > 0:
-            #    sys.stdout.write('Starting archive operation for host: %s\n' % sorted(needs_backup)[0][1])
-            #    start_archive([sorted(needs_backup)[0][1]])
-            if options.start:
-                for candidate, score in score_iter:
-                    if score > 0:
-                        sys.stdout.write('Starting archive operation for host: %s (score=%g)\n' % (candidate, score))
-                        start_archive([candidate])
-                        break
+        to_ignore = int(options.keep)
+        to_delete = []
+        if options.host and options.backupnum:
+            print("Will delete backup: %s %i (forced)" % (options.host, options.backupnum))
+            to_delete.append((options.host, options.backupnum))
+        elif options.age:
+            to_delete_dict = choose_backups_to_delete(bmgr.backups_by_age, target_count=to_ignore, max_age=int(options.age))
+            for hostname, backuplist in to_delete_dict.items():
+                for backupstat in backuplist:
+                    print("Will delete backup: %s %i (expired, age=%g days)" % (hostname, backupstat[0], backupstat[1]/86400.0))
+                    to_delete.append((hostname, backupstat[0]))
 
-        elif options.host and options.backupnum:
-            for bucket in buckets:
-                hostnames = list_backups(bucket)
-                if options.host in hostnames.keys():
-                    if options.backupnum not in hostnames[options.host].keys():
-                        parser.error('Backup number %i not found' % options.backupnum)
-                    toast = hostnames[options.host][options.backupnum]
-                    filecount = len(toast['keys'])
-                    if toast['finalized'] > 0:
-                        datestruct = toast['finalized']
-                    else:
-                        datestruct = toast['date']
-
-                    datestruct = toast['date']
-                    timestamp = time.mktime(datestruct)
-                    delta = int(time.time() - timestamp + time.timezone)
-
-                    if options.unfinalized and toast['finalized'] > 0:
-                        sys.stdout.write('Bypassing finalized backup %s #%i (%i files, age %.2f days)\n' % (hostname, backupnum, filecount, delta/86400.0))
-                    else:
-                        sys.stdout.write('Deleting %s #%i (%i files, age %.2f days)...' % (options.host, options.backupnum, filecount, delta/86400.0))
-                        for key in toast['keys']:
-                            if options.test:
-                                sys.stdout.write('*')
-                            else:
-                                key.delete()
-                                sys.stdout.write('.')
-                        if toast['finalkey']:
-                            if options.test:
-                                sys.stdout.write('X')
-                            else:
-                                toast['finalkey'].delete()
-                                sys.stdout.write('!')
-                        sys.stdout.write('\n')
-                else:
-                    parser.error('Host %s not found' % options.host)
         else:
             parser.error('Need either an age or a host AND backup number.')
 
+        if len(to_delete) > 0:
+            for deletehost, deletebackupnum in to_delete:
+                hostbackups = bmgr.all_backups.get(deletehost, {})
+                deletebackup = hostbackups.get(deletebackupnum, {})
+                deletekeys = deletebackup.get('keys', [])
+                finalkey = deletebackup.get('finalkey', None)
+                if len(deletekeys) > 0:
+                    sys.stdout.write("Deleting backup: %s %d (%d keys)" % (deletehost, deletebackupnum, len(deletekeys)))
+                    for key in deletekeys:
+                        if options.test:
+                            sys.stdout.write('_')
+                        else:
+                            key.delete()
+                            sys.stdout.write('.')
+                        sys.stdout.flush()
+                    if finalkey is not None:
+                        if options.test:
+                            sys.stdout.write('+')
+                        else:
+                            finalkey.delete()
+                            sys.stdout.write('!')
+                        sys.stdout.flush()
+                    sys.stdout.write('\n')
+
+        if options.start:
+            for deletehost, deletebackupnum in to_delete:
+                bmgr.invalidate_host_cache(deletehost)
+            score_iter = choose_host_to_backup(bmgr.backups_by_age, target_count=int(options.keep)+1)
+            for candidate, score in score_iter:
+                if score > 0:
+                    sys.stdout.write('Starting archive operation for host: %s (score=%g)\n' % (candidate, score))
+                    start_archive([candidate])
+                    break
+    if args[0] == 'list' or options.list:
+        sys.stdout.write('%25s | %5s | %20s | %5s\n' % ("Hostname", "Bkup#", "Age", "Files"))
+        sys.stdout.write('-'*72 + '\n')
+        for hostname, backups in bmgr.all_backups.items():
+            for backupnum in sorted(backups.keys()):
+                filecount = len(backups[backupnum]['keys'])
+                datestruct = backups[backupnum]['date']
+                if backups[backupnum]['finalized'] > 0:
+                    inprogress = ''
+                else:
+                    inprogress = '*'
+                timestamp = time.mktime(datestruct)
+                delta = int(time.time() - timestamp + time.timezone)
+                if delta < 3600:
+                    prettydelta = '%i min ago' % (delta/60)
+                elif delta < 86400:
+                    prettydelta = '%i hr ago' % (delta/3600)
+                else:
+                    days = int(delta/60/60/24)
+                    if days == 1:
+                        s = ''
+                    else:
+                        s = 's'
+                    prettydelta = '%i day%s ago' % (days, s)
+
+                sys.stdout.write('%25s | %5i | %20s | %5i%s\n' % (hostname, backupnum, prettydelta, filecount, inprogress))
+        sys.stdout.write('* == not yet finalized (Age == time of last activity)\n')
+
 if __name__ == '__main__':
     main()
-
