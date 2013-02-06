@@ -33,6 +33,8 @@ from boto.s3.connection import S3Connection
 from boto.s3.key import Key
 import boto.exception
 
+from collections import defaultdict
+from math import log10
 from subprocess import *
 
 def open_s3(accesskey, sharedkey):
@@ -99,17 +101,54 @@ def list_backups(bucket):
 
         if hostname in backups.keys():
             if not backupnum in backups[hostname].keys():
-                backups[hostname][backupnum] = {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None}
+                backups[hostname][backupnum] = {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None, 'finalized_age': -1}
         else:
-            backups[hostname] = {backupnum: {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None}}
+            backups[hostname] = {backupnum: {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None, 'finalized_age': -1}}
         if final:
             backups[hostname][backupnum]['finalized'] = lastmod
             backups[hostname][backupnum]['finalkey'] = key
+            timestamp = time.mktime(lastmod)
+            delta = int(time.time() - timestamp + time.timezone)
+            backups[hostname][backupnum]['finalized_age'] = delta 
         else:
             if lastmod < backups[hostname][backupnum]['date']:
                 backups[hostname][backupnum]['date'] = lastmod
             backups[hostname][backupnum]['keys'].append(key)
     return backups
+
+def backups_by_age(conn, name=None):
+    "Returns a dict of {hostname: [(backupnum, age), ...]}"
+    results = defaultdict(list)
+    for bucket in iter_backup_buckets(conn, name=name):
+        for hostname, backups in list_backups(bucket).items():
+            for backupnum, statusdict in backups.items():
+                results[hostname].append((backupnum, statusdict['finalized_age']))
+    return results
+
+def choose_host_to_backup(agedict, target_count=2):
+    "Takes a dict from backups_by_age, returns a hostname to back up."
+
+    host_scores = defaultdict(int)
+
+    for hostname, backuplist in agedict.items():
+        bl = sorted(backuplist, key=lambda x: x[1])
+        if len(bl) > 0 and bl[0][1] == -1:
+            # unfinalized backup alert
+            host_scores[hostname] += 200
+            bl.pop(0)
+        if len(bl) >= target_count:
+            host_scores[hostname] -= 100
+        host_scores[hostname] -= len(bl)
+        if len(bl) > 0:
+            # age of oldest backup helps score
+            oldest = bl[0]
+            host_scores[hostname] += log10(oldest[1])
+            # recency of newest backup hurts score
+            newest = bl[-1]
+            host_scores[hostname] -= log10(max(1, (oldest[1] - newest[1])))
+
+    for candidate, score in sorted(host_scores.items(), key=lambda x: x[1], reverse=True):
+        yield (candidate, score)
 
 def iter_urls(keyset, expire=86400):
     """Given a list of keys and an optional expiration time (in seconds),
@@ -235,6 +274,10 @@ def main():
     if options.backupnum:
         options.backupnum = int(options.backupnum)
 
+    # TODO: refactor this somewhere better
+    backups_by_age_list = backups_by_age(conn)
+    score_iter = choose_host_to_backup(backups_by_age_list, target_count=int(options.keep))
+    
     if len(args) == 0:
         args.append('list')
 
@@ -378,9 +421,16 @@ def main():
                                 deletes += 1
                     if (len(backuplist)-deletes) < int(options.keep):
                         needs_backup.append((oldest_timestamp, hostname))
-            if options.start and len(needs_backup) > 0:
-                sys.stdout.write('Starting archive operations for hosts: %s\n' % ', '.join(x[1] for x in sorted(needs_backup)))
-                start_archive([x[1] for x in sorted(needs_backup)])
+            #if options.start and len(needs_backup) > 0:
+            #    sys.stdout.write('Starting archive operation for host: %s\n' % sorted(needs_backup)[0][1])
+            #    start_archive([sorted(needs_backup)[0][1]])
+            if options.start:
+                for candidate, score in score_iter:
+                    if score > 0:
+                        sys.stdout.write('Starting archive operation for host: %s (score=%g)\n' % (candidate, score))
+                        start_archive([candidate])
+                        break
+
         elif options.host and options.backupnum:
             for bucket in buckets:
                 hostnames = list_backups(bucket)
