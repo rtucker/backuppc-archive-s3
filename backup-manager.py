@@ -2,7 +2,7 @@
 #
 # Script to manage S3-stored backups
 #
-# Copyright (c) 2009-2011 Ryan S. Tucker
+# Copyright (c) 2009-2013 Ryan S. Tucker
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -30,14 +30,14 @@ import sys
 import time
 
 from boto.s3.connection import S3Connection
-from boto.s3.key import Key
-import boto.exception
 
 from collections import defaultdict
 from math import log10
-from subprocess import *
+from subprocess import Popen
+
 
 class BackupManager:
+
     def __init__(self, accesskey, sharedkey):
         self._accesskey = accesskey
         self._connection = S3Connection(accesskey, sharedkey)
@@ -79,7 +79,7 @@ class BackupManager:
 
         for key in bucket.list():
             keyparts = key.key.split('.')
-            encrypted = split = tarred = final = False
+            final = False
 
             if keyparts[-1] == 'COMPLETE':
                 final = True
@@ -87,15 +87,12 @@ class BackupManager:
                 keyparts.pop() # back to backup number
             else:
                 if keyparts[-1] == 'gpg':
-                    encrypted = True
                     keyparts.pop()
 
                 if keyparts[-1] != 'tar' and len(keyparts[-1]) is 2:
-                    split = True
                     keyparts.pop()
 
                 if keyparts[-1] == 'tar':
-                    tarred = True
                     keyparts.pop()
 
             nextpart = keyparts.pop()
@@ -105,19 +102,38 @@ class BackupManager:
             backupnum = int(nextpart)
             hostname = '.'.join(keyparts)
 
-            lastmod = time.strptime(key.last_modified, '%Y-%m-%dT%H:%M:%S.000Z')
+            lastmod = time.strptime(key.last_modified,
+                                    '%Y-%m-%dT%H:%M:%S.000Z')
 
             if hostname in backups.keys():
                 if not backupnum in backups[hostname].keys():
-                    backups[hostname][backupnum] = {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None, 'finalized_age': -1}
+                    backups[hostname][backupnum] = {
+                        'date': lastmod,
+                        'hostname': hostname,
+                        'backupnum': backupnum,
+                        'finalized': 0,
+                        'keys': [],
+                        'finalkey': None,
+                        'finalized_age': -1,
+                    }
             else:
-                backups[hostname] = {backupnum: {'date': lastmod, 'hostname': hostname, 'backupnum': backupnum, 'finalized': 0, 'keys': [], 'finalkey': None, 'finalized_age': -1}}
+                backups[hostname] = {
+                    backupnum: {
+                        'date': lastmod,
+                        'hostname': hostname,
+                        'backupnum': backupnum,
+                        'finalized': 0,
+                        'keys': [],
+                        'finalkey': None,
+                        'finalized_age': -1,
+                    }
+                }
             if final:
                 backups[hostname][backupnum]['finalized'] = lastmod
                 backups[hostname][backupnum]['finalkey'] = key
                 timestamp = time.mktime(lastmod)
                 delta = int(time.time() - timestamp + time.timezone)
-                backups[hostname][backupnum]['finalized_age'] = delta 
+                backups[hostname][backupnum]['finalized_age'] = delta
             else:
                 if lastmod < backups[hostname][backupnum]['date']:
                     backups[hostname][backupnum]['date'] = lastmod
@@ -136,7 +152,8 @@ class BackupManager:
             sys.stderr.write("Enumerating backups")
             self._backups = {}
             for bucket in self.backup_buckets:
-                for hostname, backups in self.get_backups_by_bucket(bucket).items():
+                backups_dict = self.get_backups_by_bucket(bucket)
+                for hostname, backups in backups_dict.items():
                     sys.stderr.write('.')
                     sys.stderr.flush()
                     if hostname not in self._backups:
@@ -162,8 +179,10 @@ class BackupManager:
         results = defaultdict(list)
         for hostname, backups in self.all_backups.items():
             for backupnum, statusdict in backups.items():
-                results[hostname].append((backupnum, statusdict['finalized_age']))
+                results[hostname].append((backupnum,
+                                          statusdict['finalized_age']))
         return results
+
 
 def choose_host_to_backup(agedict, target_count=2):
     "Takes a dict from backups_by_age, returns a hostname to back up."
@@ -187,8 +206,10 @@ def choose_host_to_backup(agedict, target_count=2):
             newest = bl[-1]
             host_scores[hostname] -= log10(max(1, (oldest[1] - newest[1])))
 
-    for candidate, score in sorted(host_scores.items(), key=lambda x: x[1], reverse=True):
+    for candidate, score in sorted(host_scores.items(),
+                                   key=lambda x: x[1], reverse=True):
         yield (candidate, score)
+
 
 def choose_backups_to_delete(agedict, target_count=2, max_age=30):
     "Takes a dict from backups_by_age, returns a list of backups to delete"
@@ -203,10 +224,11 @@ def choose_backups_to_delete(agedict, target_count=2, max_age=30):
 
         while len(bl) > target_count:
             backup = bl.pop()
-            if backup[1] > max_age*24*60*60:
+            if backup[1] > (max_age * 24 * 60 * 60):
                 decimate[hostname].append(backup)
 
     return decimate
+
 
 def iter_urls(keyset, expire=86400):
     """Given a list of keys and an optional expiration time (in seconds),
@@ -215,26 +237,28 @@ def iter_urls(keyset, expire=86400):
     for key in keyset:
         yield key.generate_url(expires_in=expire)
 
+
 def make_restore_script(backup, expire=86400):
     """Returns a quick and easy restoration script to restore the given system,
        requires a backup, and perhaps expire"""
 
     myhostname = backup['hostname']
     mybackupnum = backup['backupnum']
-    myfilecount = len(backup['keys'])
     myfriendlytime = time.strftime('%Y-%m-%d at %H:%M GMT', backup['date'])
-    myexpiretime = time.strftime('%Y-%m-%d at %H:%M GMT', time.gmtime(time.time()+expire))
-    myexpiretimestamp = time.time()+expire
+    myexpiretime = time.strftime('%Y-%m-%d at %H:%M GMT',
+                                 time.gmtime(time.time() + expire))
+    myexpiretimestamp = time.time() + expire
 
     output = []
 
     output.append('#!/bin/sh\n')
-    output.append('# Restoration script for %s backup %s,\n' % (myhostname, mybackupnum))
+    output.append('# Restoration script for %s backup %s,\n' % (
+                   myhostname, mybackupnum))
     output.append('# a backup created on %s.\n' % (myfriendlytime))
     output.append('# To use: bash scriptname /path/to/put/the/files\n\n')
     output.append('# WARNING: THIS FILE EXPIRES AFTER %s\n' % (myexpiretime))
     output.append('if [ "`date +%%s`" -gt "%i" ];\n' % (myexpiretimestamp))
-    output.append('    then echo "Sorry, but this restore script is too old.";\n')
+    output.append('    then echo "Sorry, this restore script is too old.";\n')
     output.append('         exit 1;\n')
     output.append('fi\n\n')
     output.append('if [ -z "$1" ];\n')
@@ -257,7 +281,8 @@ def make_restore_script(backup, expire=86400):
 
     mysortedfilelist = []
     for key in backup['keys']:
-        output.append('wget -O $1/.restorescript-scratch/%s "%s"\n' % (key.name, key.generate_url(expires_in=expire)))
+        output.append('wget -O $1/.restorescript-scratch/%s "%s"\n' % (
+                        key.name, key.generate_url(expires_in=expire)))
         mysortedfilelist.append('.restorescript-scratch/' + key.name)
     mysortedfilelist.sort()
 
@@ -272,6 +297,7 @@ def make_restore_script(backup, expire=86400):
     output.append('echo "DONE!  Have a nice day."\n##\n')
 
     return output
+
 
 def start_archive(hosts):
     "Starts an archive operation for a list of hosts."
@@ -292,6 +318,7 @@ def start_archive(hosts):
     proc = Popen(cmd)
     proc.communicate()
 
+
 def main():
     # check command line options
     parser = optparse.OptionParser(
@@ -301,8 +328,7 @@ def main():
             "By default, it assumes the 'list' command, which displays all " +
             "of the backups currently archived on S3.  The 'delete' command " +
             "is used to delete backups.  The 'script' command produces a " +
-            "script that can be used to download and restore a backup."
-        )
+            "script that can be used to download and restore a backup.")
     parser.add_option("-H", "--host", dest="host",
                       help="Name of backed-up host")
     parser.add_option("-b", "--backup-number", dest="backupnum",
@@ -310,7 +336,8 @@ def main():
     parser.add_option("-a", "--age", dest="age",
                       help="Delete backups older than AGE days")
     parser.add_option("-k", "--keep", dest="keep",
-                      help="When used with --age, keep this many recent backups (default=1)", default=1)
+                      help="When used with --age, keep this many recent " +
+                           "backups (default=1)", default=1)
     parser.add_option("-f", "--filename", dest="filename",
                       help="Output filename for script")
     parser.add_option("-x", "--expire", dest="expire",
@@ -320,8 +347,11 @@ def main():
     parser.add_option("-u", "--unfinalized", dest="unfinalized",
                       action="store_true", help="Consider unfinalized backups")
     parser.add_option("-s", "--start-backups", dest="start",
-                      action="store_true", help="When used with --age, start backups for hosts with fewer than keep+1 backups")
-    parser.add_option("-l", "--list", dest="list", action="store_true", help="List stored backups after completing operations")
+                      action="store_true",
+                      help="When used with --age, start backups for hosts " +
+                           "with fewer than keep+1 backups")
+    parser.add_option("-l", "--list", dest="list", action="store_true",
+                      help="List stored backups after completing operations")
 
     (options, args) = parser.parse_args()
 
@@ -372,7 +402,8 @@ def main():
                 if bmgr.all_backups[options.host][backup]['finalized'] > 0:
                     options.backupnum = max(options.backupnum, backup)
             if options.backupnum == 0:
-                parser.error('No finalized backups found!  Try --unfinalized if you dare')
+                parser.error('No finalized backups found!  Try '
+                             '--unfinalized if you dare')
 
         backup = bmgr.all_backups[options.host][options.backupnum]
 
@@ -381,20 +412,26 @@ def main():
 
         if options.filename:
             fd = open(options.filename, 'w')
-            fd.writelines(make_restore_script(backup, expire=int(options.expire)))
+            fd.writelines(make_restore_script(backup,
+                          expire=int(options.expire)))
         else:
-            sys.stdout.writelines(make_restore_script(backup, expire=int(options.expire)))
+            sys.stdout.writelines(make_restore_script(backup,
+                                  expire=int(options.expire)))
     elif args[0] == 'delete':
         to_ignore = int(options.keep)
         to_delete = []
         if options.host and options.backupnum:
-            print("Will delete backup: %s %i (forced)" % (options.host, options.backupnum))
+            print("Will delete backup: %s %i (forced)" % (
+                   options.host, options.backupnum))
             to_delete.append((options.host, options.backupnum))
         elif options.age:
-            to_delete_dict = choose_backups_to_delete(bmgr.backups_by_age, target_count=to_ignore, max_age=int(options.age))
+            to_delete_dict = choose_backups_to_delete(bmgr.backups_by_age,
+                                target_count=to_ignore,
+                                max_age=int(options.age))
             for hostname, backuplist in to_delete_dict.items():
                 for backupstat in backuplist:
-                    print("Will delete backup: %s %i (expired, age=%g days)" % (hostname, backupstat[0], backupstat[1]/86400.0))
+                    print("Will delete backup: %s %i (expired at %g days)" % (
+                            hostname, backupstat[0], backupstat[1] / 86400.0))
                     to_delete.append((hostname, backupstat[0]))
 
         else:
@@ -407,7 +444,8 @@ def main():
                 deletekeys = deletebackup.get('keys', [])
                 finalkey = deletebackup.get('finalkey', None)
                 if len(deletekeys) > 0:
-                    sys.stdout.write("Deleting backup: %s %d (%d keys)" % (deletehost, deletebackupnum, len(deletekeys)))
+                    sys.stdout.write("Deleting backup: %s %d (%d keys)" % (
+                            deletehost, deletebackupnum, len(deletekeys)))
                     for key in deletekeys:
                         if options.test:
                             sys.stdout.write('_')
@@ -427,15 +465,18 @@ def main():
         if options.start:
             for deletehost, deletebackupnum in to_delete:
                 bmgr.invalidate_host_cache(deletehost)
-            score_iter = choose_host_to_backup(bmgr.backups_by_age, target_count=int(options.keep)+1)
+            score_iter = choose_host_to_backup(bmgr.backups_by_age,
+                                    target_count=int(options.keep) + 1)
             for candidate, score in score_iter:
                 if score > 0:
-                    sys.stdout.write('Starting archive operation for host: %s (score=%g)\n' % (candidate, score))
+                    sys.stdout.write('Starting archive operation for host: '
+                                     '%s (score=%g)\n' % (candidate, score))
                     start_archive([candidate])
                     break
     if args[0] == 'list' or options.list:
-        sys.stdout.write('%25s | %5s | %20s | %5s\n' % ("Hostname", "Bkup#", "Age", "Files"))
-        sys.stdout.write('-'*72 + '\n')
+        sys.stdout.write('%25s | %5s | %20s | %5s\n' % (
+                "Hostname", "Bkup#", "Age", "Files"))
+        sys.stdout.write(('-' * 72) + '\n')
         for hostname, backups in bmgr.all_backups.items():
             for backupnum in sorted(backups.keys()):
                 filecount = len(backups[backupnum]['keys'])
@@ -447,19 +488,21 @@ def main():
                 timestamp = time.mktime(datestruct)
                 delta = int(time.time() - timestamp + time.timezone)
                 if delta < 3600:
-                    prettydelta = '%i min ago' % (delta/60)
+                    prettydelta = '%i min ago' % (delta / 60)
                 elif delta < 86400:
-                    prettydelta = '%i hr ago' % (delta/3600)
+                    prettydelta = '%i hr ago' % (delta / 3600)
                 else:
-                    days = int(delta/60/60/24)
+                    days = int(delta / 60 / 60 / 24)
                     if days == 1:
                         s = ''
                     else:
                         s = 's'
                     prettydelta = '%i day%s ago' % (days, s)
 
-                sys.stdout.write('%25s | %5i | %20s | %5i%s\n' % (hostname, backupnum, prettydelta, filecount, inprogress))
-        sys.stdout.write('* == not yet finalized (Age == time of last activity)\n')
+                sys.stdout.write('%25s | %5i | %20s | %5i%s\n' % (
+                    hostname, backupnum, prettydelta, filecount, inprogress))
+        sys.stdout.write('* == not yet finalized (Age == time of '
+                         'last activity)\n')
 
 if __name__ == '__main__':
     main()
